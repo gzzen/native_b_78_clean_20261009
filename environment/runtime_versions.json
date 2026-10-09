@@ -1,0 +1,10 @@
+{
+  "platform": "linux",
+  "source_python": "Python 3.11.14",
+  "source_r": "warning  libmamba WARNING: overwriting environment variables set in the machine\nwarning  libmamba Overwriting variables: LD_LIBRARY_PATH",
+  "codex": "codex-cli 0.154.0",
+  "model": "gpt-5.6-luna",
+  "reasoning_effort": "low",
+  "timeout_seconds": 3600,
+  "generation_requires_codex_authentication": true
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "candidates", "summary"],
+  "properties": {
+    "status": {"type": "string", "enum": ["resolved", "unresolved"]},
+    "candidates": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["answer", "method", "evidence"],
+        "properties": {
+          "answer": {"type": "string"},
+          "method": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "summary": {"type": "string"}
+  }
+}

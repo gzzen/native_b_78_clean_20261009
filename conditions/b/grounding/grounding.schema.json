@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Condition B selective grounding",
+  "type": "object",
+  "required": [
+    "capsule_uuid",
+    "questions"
+  ],
+  "properties": {
+    "capsule_uuid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "question_id",
+          "data_object",
+          "observation_unit",
+          "comparison",
+          "metric_or_outcome",
+          "unit_or_scale",
+          "denominator_or_population",
+          "method_or_estimator",
+          "grounding_status",
+          "selection_rationale"
+        ],
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "data_object": {
+            "type": "string",
+            "minLength": 1
+          },
+          "observation_unit": {
+            "type": "string",
+            "minLength": 1
+          },
+          "comparison": {
+            "type": "string",
+            "minLength": 1
+          },
+          "metric_or_outcome": {
+            "type": "string",
+            "minLength": 1
+          },
+          "unit_or_scale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "denominator_or_population": {
+            "type": "string",
+            "minLength": 1
+          },
+          "method_or_estimator": {
+            "type": "string",
+            "minLength": 1
+          },
+          "grounding_status": {
+            "enum": [
+              "resolved",
+              "partially_resolved",
+              "unresolved"
+            ]
+          },
+          "result_status": {
+            "enum": [
+              "answered",
+              "unresolved",
+              "execution_failed"
+            ]
+          },
+          "selection_rationale": {
+            "type": "string",
+            "minLength": 1
+          },
+          "selected_interpretation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interpretations": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "evidence",
+                "data_object",
+                "observation_unit",
+                "comparison",
+                "metric_or_outcome",
+                "unit_or_scale",
+                "denominator_or_population",
+                "method_or_estimator"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "data_object": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "observation_unit": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "comparison": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "metric_or_outcome": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "unit_or_scale": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "denominator_or_population": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "method_or_estimator": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

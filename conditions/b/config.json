@@ -1,0 +1,22 @@
+{
+  "condition": "b_v3_contrastive_grounding_selection",
+  "display_name": "Contrastive grounding selection",
+  "extends": "a",
+  "composition": "conditions.a.runner + conditions.b.components",
+  "capabilities": ["contrastive_grounding_selection", "grounding_execution_consistency"],
+  "calls_per_capsule": 1,
+  "retry": false,
+  "reflection": false,
+  "multihead": false,
+  "requires_task_code_persistence": true,
+  "temporary_directory_scope": "one_private_workspace_tmp_per_capsule_attempt",
+  "shared_tmp_forbidden": true,
+  "requires_execution_record": true,
+  "consistency_check": true,
+  "interpretations_per_question": "2-3",
+  "selection_evidence_required": true,
+  "scope": "standalone-78",
+  "imports_allowed": ["conditions.a", "conditions.b.components"],
+  "inherits_a_prompt": true,
+  "inherits_a_graded_compliance": true
+}

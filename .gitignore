@@ -1,0 +1,59 @@
+# Path: .gitignore
+# Purpose: Keep local credentials, caches, data and new experiment outputs out of Git.
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Credentials and machine-local configuration
+.env
+.env.*
+!.env.example
+!.env.*.example
+.aws/
+.codex/
+.opencode/
+opencode.json
+opencode.jsonc
+auth.json
+*.pem
+*.key
+
+# Local datasets, attempt workspaces and generated artifacts.
+# Already tracked frozen artifacts remain tracked.
+/data/
+/dataset_78/
+/runs/
+/analysis/
+/reports/
+/results/
+/diagnostics/
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.tar.gz
+*.tar.zst
+
+# OS, editors and scientific session state
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+.Rhistory
+.RData
+.Rproj.user/
+.ipynb_checkpoints/

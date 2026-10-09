@@ -1,0 +1,17 @@
+{
+  "condition": "native_raw_question",
+  "calls_per_question": 1,
+  "question_count": 78,
+  "max_concurrent_workers": 59,
+  "granularity": "question",
+  "retry": false,
+  "reflection": false,
+  "multihead": false,
+  "requires_task_code_persistence": true,
+  "temporary_directory_scope": "one_private_workspace_tmp_per_question_attempt",
+  "shared_tmp_forbidden": true,
+  "prompt_policy": "public question followed by the fixed Native executable-code contract",
+  "code_location": "analysis/scripts/",
+  "controller_requires_execution": true,
+  "resolved_candidate_requires_source_citation": true
+}

@@ -1,0 +1,9 @@
+{
+  "condition": "a",
+  "display_name": "Capsule-level executable workflow projection",
+  "calls_per_capsule": 1,
+  "retry": false,
+  "reflection": false,
+  "multihead": false,
+  "requires_task_code_persistence": true
+}
