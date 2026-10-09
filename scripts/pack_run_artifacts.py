@@ -21,6 +21,8 @@ WORKSPACE_FILES = (
 )
 # Generated scripts, audits and outputs. data/, tmp/ and home/ (OpenCode config/state) are never packed.
 WORKSPACE_DIRS = ("analysis",)
+# Checkout-level directories holding per-experiment manifests, reports, predictions and logs.
+OUTPUT_DIRS = ("analysis", "reports", "results", "logs", "diagnostics")
 
 
 def sha256(path: Path) -> str:
@@ -52,21 +54,46 @@ def regular_files(directory: Path) -> list[Path]:
     return found
 
 
-def candidates(root: Path, experiment: str, roots: list[Path]) -> list[Path]:
+def belongs_to(name: str, experiment: str) -> bool:
+    # Tags are <experiment>_<condition>_<label>; reports may be upper-cased (HARD_ISOLATED_..._GENERATION.md).
+    name, key = name.lower(), experiment.lower()
+    return name == key or name.startswith((key + "_", key + "."))
+
+
+def is_answer_derived(path: Path) -> bool:
+    """Private-evaluator scoring output; kept out of the answer-blind archive."""
+    return "scoring" in path.name.lower()
+
+
+def experiment_outputs(root: Path, experiment: str) -> list[Path]:
+    """Files outside runs/ that carry this experiment's answers, reports or diagnostic logs."""
+    files: list[Path] = []
+    for directory in OUTPUT_DIRS:
+        base = root / directory
+        entries = sorted(base.iterdir()) if base.is_dir() else []
+        for entry in entries:
+            if entry.is_symlink() or not belongs_to(entry.name, experiment):
+                continue
+            files += regular_files(entry) if entry.is_dir() else [entry]
+    # Terminal logs tee'd into the checkout root, e.g. <run_tag>.log.
+    files += sorted(path for path in root.glob("*.log") if belongs_to(path.name, experiment))
+    return [path for path in files if path.is_file() and not path.is_symlink()]
+
+
+def workspace_artifacts(roots: list[Path]) -> list[Path]:
     files: list[Path] = []
     for run_root in roots:
         for workspace in workspaces(run_root):
             files += [workspace / name for name in WORKSPACE_FILES]
             files += [path for name in WORKSPACE_DIRS if (workspace / name).is_dir()
                       for path in regular_files(workspace / name)]
-        tag = run_root.name
-        files += sorted((root / "analysis").glob(f"{tag}_*.json"))
-        files += sorted((root / "reports").glob(f"{tag}_*.md"))
-    files += regular_files(root / "logs" / experiment) if (root / "logs" / experiment).is_dir() else []
-    # Answer-blind exports only; scoring outputs from the private evaluator are not packed.
-    results = root / "results" / experiment
-    files += sorted(results.glob("*.jsonl")) + sorted(results.glob("*.provenance.json"))
-    return files
+    return [path for path in files if path.is_file() and not path.is_symlink()]
+
+
+def candidates(root: Path, experiment: str, roots: list[Path]) -> list[Path]:
+    """Everything the archive should hold: workspace artifacts plus answer-blind experiment outputs."""
+    outputs = [path for path in experiment_outputs(root, experiment) if not is_answer_derived(path)]
+    return workspace_artifacts(roots) + outputs
 
 
 def main() -> None:
@@ -114,6 +141,8 @@ def main() -> None:
         "total_bytes": sum(size for _, _, size in packed),
         "files": [{"path": relative, "bytes": size, "sha256": sha256(path)} for path, relative, size in packed],
         "skipped": skipped,
+        "excluded_answer_derived": [path.relative_to(root).as_posix() for path in experiment_outputs(root, experiment)
+                                    if is_answer_derived(path)],
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
