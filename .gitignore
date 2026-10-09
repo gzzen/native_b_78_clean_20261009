@@ -39,6 +39,7 @@ auth.json
 /reports/
 /results/
 /diagnostics/
+/out/
 *.log
 *.sqlite
 *.sqlite-*
