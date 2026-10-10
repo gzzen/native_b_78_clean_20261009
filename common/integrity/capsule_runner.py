@@ -11,7 +11,7 @@ from common.integrity.hashing import write_json
 from common.integrity.isolation_audit import audit_events_v121 as audit_events
 from common.benchmark.a84_contract import workspace_temp_environment
 from common.integrity.attempt_container import isolated_attempt
-from common.integrity.opencode_capture import opencode_command, capture_opencode, write_result
+from common.integrity.codex_agent import codex_command, capture_agent, write_result
 from common.integrity.evaluator_access_policy import generation_event_guard, answer_blind_env
 
 def _workspace(root: Path, rows: list[dict[str, Any]], environment: dict[str, Any]) -> Path:
@@ -24,7 +24,7 @@ def _workspace(root: Path, rows: list[dict[str, Any]], environment: dict[str, An
     return workspace
 
 def _capture(command: list[str], env: dict[str, str], timeout: int) -> tuple[int | None, list[dict[str, Any]], str, float]:
-    return capture_opencode(command, env, timeout)
+    return capture_agent(command, env, timeout)
 
 def _validate(result: dict[str, Any], rows: list[dict[str, Any]]) -> None:
     expected = [row["question_id"] for row in rows]
@@ -41,15 +41,15 @@ def run_one_shot(*, condition: str, prompt: Path, bash_env: Path, schema: Path, 
     prompt_text = prompt.read_text(encoding="utf-8")
     def one(rows: list[dict[str, Any]]) -> dict[str, Any]:
         workspace = _workspace(run_root, rows, environment)
-        command = opencode_command(prompt_text, schema, MODEL)
+        command = codex_command(prompt_text, schema, MODEL)
         environment = answer_blind_env(controlled_env(bash_env))
         environment.update(workspace_temp_environment(workspace))
         with isolated_attempt(command, environment, workspace, schema=schema, reasoning_effort=REASONING_EFFORT) as (argv, env):
-            code, events, stderr, elapsed = capture_opencode(argv, env, timeout, event_guard=generation_event_guard(workspace))
+            code, events, stderr, elapsed = capture_agent(argv, env, timeout, event_guard=generation_event_guard(workspace))
         write_json(workspace / "event_timeline.json", events); (workspace / "events.jsonl").write_text("".join(json.dumps(event["event"]) + "\n" for event in events)); (workspace / "stderr.log").write_text(stderr)
         record: dict[str, Any] = {"condition": condition, "short_id": rows[0]["short_id"], "capsule_uuid": rows[0]["capsule_uuid"], "question_ids": [row["question_id"] for row in rows], "workspace": str(workspace), "calls": 1, "retry": False, "runtime_seconds": elapsed, "return_code": code, "accepted": False}
         try:
-            if code != 0: raise RuntimeError(f"OpenCode exit={code}")
+            if code != 0: raise RuntimeError(f"Codex exit={code}")
             result = write_result(events, schema, workspace / "capsule_result.json")
             if persistence_check: record["code_provenance"] = persistence_check(workspace, events)
             record["isolation_audit"] = audit_events(events, workspace)

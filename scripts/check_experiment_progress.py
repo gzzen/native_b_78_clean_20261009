@@ -174,11 +174,11 @@ def inspect_run(root: Path, experiment: str, condition: str, seed: str,
 def latest_experiment(root: Path) -> str:
     candidates: dict[str, float] = {}
     for path in (root / "analysis").glob("*.json"):
-        match = re.fullmatch(r"((?:deepseek_full|opencode_deepseek)_[A-Za-z0-9_.-]+)_(?:native|b)_(?:seed|rep)\d{2}_(?:manifest|generation)\.json", path.name)
+        match = re.fullmatch(r"((?:codex|deepseek_full|opencode_deepseek)_[A-Za-z0-9_.-]+)_(?:native|b)_(?:seed|rep)\d{2}_(?:manifest|generation)\.json", path.name)
         if match:
             candidates[match.group(1)] = max(candidates.get(match.group(1), 0), path.stat().st_mtime)
     if not candidates:
-        raise ValueError("no DeepSeek experiment found; pass --experiment-id explicitly")
+        raise ValueError("no experiment found; pass --experiment-id explicitly")
     return max(candidates, key=candidates.get)
 
 
@@ -219,7 +219,7 @@ def print_status(snapshot: dict, details: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check experiment progress without starting or changing any run.")
-    parser.add_argument("--experiment-id", help="default: most recently modified DeepSeek experiment")
+    parser.add_argument("--experiment-id", help="default: most recently modified experiment")
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--details", action="store_true")
     parser.add_argument("--json", action="store_true", help="print one machine-readable snapshot")

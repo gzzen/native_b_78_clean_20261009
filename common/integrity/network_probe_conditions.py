@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Path: common/integrity/network_probe_conditions.py
-# Purpose: Explicitly launch an isolated OpenCode diagnostic against an allowlisted science endpoint.
+# Purpose: Explicitly launch an isolated Codex diagnostic against an allowlisted science endpoint.
 from __future__ import annotations
 
 import argparse
@@ -14,14 +14,14 @@ sys.path.insert(0, str(ROOT))
 from common.benchmark.a84_contract import controlled_env
 from common.integrity.attempt_container import isolated_attempt
 from common.integrity.evaluator_access_policy import answer_blind_env, generation_event_guard
-from common.integrity.opencode_capture import (
-    DEFAULT_MODEL, DEFAULT_REASONING_EFFORT, capture_opencode, opencode_command, write_result,
+from common.integrity.codex_agent import (
+    DEFAULT_MODEL, DEFAULT_REASONING_EFFORT, capture_agent, codex_command, write_result,
 )
 
 
 def main(default_condition="native"):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--execute", action="store_true", help="make real DeepSeek model calls")
+    parser.add_argument("--execute", action="store_true", help="make real relay model calls")
     parser.add_argument("--condition", choices=("native", "a", "b"), default=default_condition)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT)
@@ -31,7 +31,7 @@ def main(default_condition="native"):
         print("Diagnostic requires --execute and makes model calls. For a mock-only check use scripts/smoke_attempt_isolation.py.")
         return
     tag = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    workspace = (args.run_root or ROOT / "runs" / args.condition / f"opencode_network_probe_{tag}").resolve()
+    workspace = (args.run_root or ROOT / "runs" / args.condition / f"codex_network_probe_{tag}").resolve()
     (workspace / "data").mkdir(parents=True, exist_ok=False)
     environment = answer_blind_env(controlled_env(workspace))
     environment["BASH_ENV"] = str(ROOT / "conditions" / args.condition / "agent_bix_bash_env.sh")
@@ -39,10 +39,10 @@ def main(default_condition="native"):
     prompt = ('Run curl -fsSL "https://mygene.info/v3/gene/1017?fields=symbol" '
               '> network_probe.json in this workspace. Return unresolved with no candidates '
               'and describe whether the network query succeeded in summary.')
-    command = opencode_command(prompt, schema, args.model)
+    command = codex_command(prompt, schema, args.model)
     with isolated_attempt(command, environment, workspace, schema=schema,
                           reasoning_effort=args.reasoning_effort) as (argv, env):
-        code, events, stderr, runtime = capture_opencode(argv, env, 120,
+        code, events, stderr, runtime = capture_agent(argv, env, 120,
                                                         event_guard=generation_event_guard(workspace))
     (workspace / "events.jsonl").write_text("".join(json.dumps(record["event"]) + "\n" for record in events))
     (workspace / "stderr.log").write_text(stderr)

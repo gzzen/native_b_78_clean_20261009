@@ -1,5 +1,5 @@
 # Path: common/integrity/test_attempt_container.py
-# Purpose: Verify OpenCode mounts and host-only DeepSeek credentials.
+# Purpose: Verify Codex attempt mounts and host-only relay credentials.
 from __future__ import annotations
 import http.client
 import json
@@ -29,8 +29,9 @@ class AttemptBoundaryTests(unittest.TestCase):
     def test_runtime_helper_links_allowed_but_not_as_audit_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            home = root / "home/.local/share/opencode"; home.mkdir(parents=True)
-            (home / "applypatch").symlink_to("/opt/opencode/opencode")
+            # Codex links helper aliases to its own binary under CODEX_HOME/tmp/arg0.
+            home = root / "home/.codex/tmp/arg0"; home.mkdir(parents=True)
+            (home / "apply_patch").symlink_to("/opt/codex/bin/codex")
             validate_workspace_outputs(root)
             (root / "analysis").symlink_to(root / "home", target_is_directory=True)
             with self.assertRaises(RuntimeError):
@@ -88,7 +89,7 @@ class AttemptBoundaryTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "gateway.sock"
-                config = GatewayConfig("short-token", "fixed-model", "https://api.deepseek.com/v1", "host-secret",
+                config = GatewayConfig("short-token", "fixed-model", "https://xfastapi.ai", "host-secret",
                                        science_hosts=("science.example",))
                 gateway = AttemptGateway(path, config); gateway.start()
                 try:
@@ -96,7 +97,7 @@ class AttemptBoundaryTests(unittest.TestCase):
                          patch("common.integrity.attempt_gateway.ssl.create_default_context") as tls:
                         tls.return_value.wrap_socket.side_effect = lambda sock, **kwargs: sock
                         connection = UnixConnection(path)
-                        connection.request("POST", "/model/chat/completions", '{"model":"fixed-model"}',
+                        connection.request("POST", "/model/responses", '{"model":"fixed-model"}',
                                            {"Authorization":"Bearer short-token"})
                         response = connection.getresponse()
                         self.assertEqual(response.status, 200); self.assertEqual(response.read(), b"{}")
@@ -104,7 +105,7 @@ class AttemptBoundaryTests(unittest.TestCase):
                         connection = UnixConnection(path)
                         connection.request("GET", "http://science.example/data", headers={"Authorization":"Bearer short-token"})
                         response = connection.getresponse(); response.read(); connection.close()
-                    self.assertEqual(seen, [("/v1/chat/completions", "Bearer host-secret"), ("/data", None)])
+                    self.assertEqual(seen, [("/responses", "Bearer host-secret"), ("/data", None)])
                 finally:
                     gateway.close()
         finally:
@@ -120,7 +121,7 @@ class AttemptBoundaryTests(unittest.TestCase):
     def test_gateway_denies_unknown_local_and_evaluator_destinations(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gateway.sock"
-            config = GatewayConfig("short-token", "fixed-model", "https://api.deepseek.com/v1", "host-secret",
+            config = GatewayConfig("short-token", "fixed-model", "https://xfastapi.ai", "host-secret",
                                    science_hosts=("science.example",), denied_hosts=("science.example",))
             gateway = AttemptGateway(path, config)
             gateway.start()
@@ -129,8 +130,9 @@ class AttemptBoundaryTests(unittest.TestCase):
                          ("CONNECT", "science.example:443", None, {}),
                          ("CONNECT", "unknown.example:443", None, {}),
                          ("GET", "http://169.254.169.254/latest/meta-data", None, {}),
-                         ("POST", "/model/chat/completions", '{"model":"fixed-model"}', {}),
-                         ("POST", "/model/chat/completions", '{"model":"wrong-model"}', {"Authorization":"Bearer short-token"})]
+                         ("POST", "/model/responses", '{"model":"fixed-model"}', {}),
+                         ("POST", "/model/chat/completions", '{"model":"fixed-model"}', {"Authorization":"Bearer short-token"}),
+                         ("POST", "/model/responses", '{"model":"wrong-model"}', {"Authorization":"Bearer short-token"})]
                 for method, target, body, headers in cases:
                     with self.subTest(target=target):
                         connection = UnixConnection(path)
@@ -149,22 +151,38 @@ class AttemptBoundaryTests(unittest.TestCase):
             workspace = root / "attempt"
             (workspace / "data").mkdir(parents=True)
             (workspace / "isolation_boundary.json").write_text("{}")
+            codex_home = workspace / "home/.codex"; codex_home.mkdir(parents=True)
+            config_path, catalog_path = codex_home / "config.toml", codex_home / "model_catalog.json"
+            config_path.write_text(""); catalog_path.write_text("{}")
             schema, bash_env = root / "schema.json", root / "bash.sh"
             schema.write_text("{}"); bash_env.write_text("")
             prefix = root / "environment"; prefix.mkdir()
-            binary = root / "opencode"; binary.write_text("linux binary")
+            binaries = {name: root / name for name in ("codex", "codex-code-mode-host")}
+            for path in binaries.values():
+                path.write_text("linux binary")
             socket_dir = root / "gateway"; socket_dir.mkdir()
-            command = ["opencode", "run", "--standalone", "--model", "deepseek/deepseek-flash", "--format", "json", "prompt"]
-            argv = docker_command(command, {"CONDA_PREFIX":str(prefix), "BASH_ENV":str(bash_env),
-                                  "DEEPSEEK_API_KEY":"real-secret", "EVALUATOR_API_URL":"hidden"},
-                                  workspace, socket_dir, "test-container", "short-token", binary, "image", schema=schema)
+            command = ["codex", "exec", "--json", "--model", "gpt-5.6-sol", "prompt"]
+            argv = docker_command(command, {"CONDA_PREFIX": str(prefix), "BASH_ENV": str(bash_env),
+                                  "OPENAI_API_KEY": "real-secret", "OPENAI_RELAY_API_KEY": "relay-secret",
+                                  "CODEX_HOME": str(Path.home() / ".codex"), "EVALUATOR_API_URL": "hidden"},
+                                  workspace, socket_dir, "test-container", "short-token", binaries, "image",
+                                  schema=schema, config_path=config_path, catalog_path=catalog_path)
+            joined = " ".join(argv)
             self.assertEqual(argv[argv.index("--network") + 1], "none")
             self.assertIn("--read-only", argv)
-            self.assertNotIn("real-secret", " ".join(argv))
-            self.assertNotIn("EVALUATOR_API_URL", " ".join(argv))
+            for leaked in ("real-secret", "relay-secret", "EVALUATOR_API_URL", str(Path.home() / ".codex")):
+                self.assertNotIn(leaked, joined)
+            environment = dict(argv[i + 1].split("=", 1) for i, value in enumerate(argv) if value == "--env")
+            self.assertEqual(environment["CODEX_HOME"], str(codex_home.resolve()))
+            self.assertIn(":/opt/codex/bin:", environment["PATH"])
+            self.assertEqual(argv[argv.index("/boundary/relay.py") + 1], "/opt/codex/bin/codex")
             mounts = [argv[i + 1] for i, value in enumerate(argv) if value == "--mount"]
-            self.assertEqual(len(mounts), 10)
+            self.assertEqual(len(mounts), 12)
             self.assertTrue(any(f"src={(workspace / 'data').resolve()}" in item and item.endswith(",readonly") for item in mounts))
+            for path in (config_path, catalog_path):
+                self.assertTrue(any(f"dst={path.resolve()}" in item and item.endswith(",readonly") for item in mounts), path)
+            for name in binaries:
+                self.assertTrue(any(item.endswith(f"dst=/opt/codex/bin/{name},readonly") for item in mounts), name)
             self.assertFalse(any("docker.sock" in item or "auth.json" in item for item in mounts))
 
 

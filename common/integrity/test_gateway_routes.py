@@ -1,5 +1,5 @@
 # Path: common/integrity/test_gateway_routes.py
-# Purpose: Verify each model provider is forwarded only on its own route, host and credential.
+# Purpose: Verify the relay is forwarded only on its own route, host and credential.
 from __future__ import annotations
 
 import io
@@ -10,7 +10,6 @@ from unittest.mock import MagicMock, patch
 
 from common.integrity.attempt_gateway import STREAM_IDLE_SECONDS, AttemptGateway, GatewayConfig
 
-DEEPSEEK = GatewayConfig("attempt-token", "deepseek-flash", "https://api.deepseek.com/v1", "deepseek-key")
 RELAY = GatewayConfig("attempt-token", "gpt-5.6-sol", "https://xfastapi.ai", "relay-key",
                       model_path="/responses")
 
@@ -51,17 +50,9 @@ class GatewayRouteTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer relay-key")
         self.assertEqual(headers["Host"], "xfastapi.ai")
 
-    def test_deepseek_route_is_unchanged(self):
-        handler, dial, _, connection, _ = self.forward(DEEPSEEK, "/model/chat/completions", "deepseek-flash")
-        handler.send_response.assert_called_once_with(200)
-        dial.assert_called_once_with("api.deepseek.com", 443, None)
-        self.assertEqual(connection.request.call_args.args, ("POST", "/v1/chat/completions"))
-        self.assertEqual(connection.request.call_args.kwargs["headers"]["Authorization"], "Bearer deepseek-key")
-
     def test_wrong_route_model_or_token_never_reaches_upstream(self):
         for config, path, model, token in (
                 (RELAY, "/model/chat/completions", "gpt-5.6-sol", "attempt-token"),
-                (DEEPSEEK, "/model/responses", "deepseek-flash", "attempt-token"),
                 (RELAY, "/model/responses", "gpt-5.5", "attempt-token"),
                 (RELAY, "/model/responses", "gpt-5.6-sol", "wrong-token")):
             with self.subTest(path=path, model=model, token=token):

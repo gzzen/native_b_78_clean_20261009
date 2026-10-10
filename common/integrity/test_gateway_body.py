@@ -19,8 +19,8 @@ class GatewayBodyTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(dir="/tmp")
         self.addCleanup(self.directory.cleanup)
         self.socket_path = Path(self.directory.name) / "gateway.sock"
-        config = GatewayConfig("temporary-token", "deepseek-flash",
-                               "https://api.deepseek.com/v1", "host-only-key")
+        config = GatewayConfig("temporary-token", "gpt-5.6-sol",
+                               "https://xfastapi.ai", "host-only-key")
         self.gateway = AttemptGateway(self.socket_path, config)
         self.gateway.start()
         self.addCleanup(self.gateway.close)
@@ -69,7 +69,7 @@ class GatewayBodyTests(unittest.TestCase):
                 connection.close()
 
     def head(self, length: int) -> bytes:
-        return ("POST /model/chat/completions HTTP/1.1\r\nHost: gateway\r\n"
+        return ("POST /model/responses HTTP/1.1\r\nHost: gateway\r\n"
                 "Authorization: Bearer wrong-token\r\nContent-Type: application/json\r\n"
                 f"Content-Length: {length}\r\n\r\n").encode()
 
@@ -78,14 +78,14 @@ class GatewayBodyTests(unittest.TestCase):
         # a short read would end in 400 gateway_short_body instead.
         for size in (16 * 1024, 256 * 1024, 1024 * 1024):
             with self.subTest(size=size):
-                body = json.dumps({"model": "deepseek-flash", "pad": "x" * size}).encode()
+                body = json.dumps({"model": "gpt-5.6-sol", "pad": "x" * size}).encode()
                 status, payload = self.exchange(self.head(len(body)) + body)
                 self.assertEqual(status, 403)
                 self.assertEqual(payload["error"]["type"], "gateway_forbidden")
 
     def test_truncated_body_returns_gateway_error_not_empty_400(self):
         # The relay stops on a client half-close, so talk to the gateway socket directly.
-        body = b'{"model": "deepseek-flash"}'
+        body = b'{"model": "gpt-5.6-sol"}'
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.connect(str(self.socket_path))
             connection.sendall(self.head(len(body) + 1000) + body)

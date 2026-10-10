@@ -44,7 +44,7 @@ class NativeSecurityBoundaryTests(unittest.TestCase):
             with patch.dict(os.environ, {"EVALUATOR_API_URL": "secret-url", "EVALUATOR_API_SECRET": "secret"}), \
                  patch.object(runner, "CAPSULES", capsules), \
                  patch.object(runner, "isolated_attempt", side_effect=isolate), \
-                 patch.object(runner, "capture_opencode", side_effect=capture), \
+                 patch.object(runner, "capture_agent", side_effect=capture), \
                  patch.object(runner, "command_metrics", return_value={}):
                 result = runner.run_question(row, root / "runs", 10)
             self.assertEqual(len(observed), 2)

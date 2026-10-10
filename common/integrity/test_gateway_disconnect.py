@@ -14,14 +14,14 @@ from common.integrity.attempt_gateway import AttemptGateway, GatewayConfig
 class GatewayDisconnectTests(unittest.TestCase):
     def setUp(self):
         gateway = object.__new__(AttemptGateway)
-        gateway.config = GatewayConfig("temporary-token", "deepseek-flash",
-                                       "https://api.deepseek.com/v1", "host-only-key")
+        gateway.config = GatewayConfig("temporary-token", "gpt-5.6-sol",
+                                       "https://xfastapi.ai", "host-only-key")
         gateway.model_calls = 0
         gateway.lock = threading.Lock()
         self.handler = object.__new__(gateway.handler())
         self.handler.command = "POST"
-        self.handler.path = "/model/chat/completions"
-        body = json.dumps({"model": "deepseek-flash"}).encode()
+        self.handler.path = "/model/responses"
+        body = json.dumps({"model": "gpt-5.6-sol"}).encode()
         self.handler.headers = {"Content-Length": str(len(body)),
                                 "Authorization": "Bearer temporary-token"}
         self.handler.rfile = io.BytesIO(body)

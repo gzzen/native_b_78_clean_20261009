@@ -20,7 +20,7 @@ DEFAULT_SCIENCE_HOSTS = ("mygene.info", "maayanlab.cloud", "www.ensembl.org",
                          "grch37.ensembl.org", "rest.ensembl.org")
 PROJECT_ENV = Path(__file__).resolve().parents[2] / ".env"
 DEFAULT_RELAY_BASE_URL = "https://xfastapi.ai"
-# Reasoning models can stream nothing for minutes; matches OpenCode's chunk timeout.
+# Reasoning models can stream nothing for minutes; matches Codex's stream_idle_timeout_ms.
 STREAM_IDLE_SECONDS = 300
 
 
@@ -50,10 +50,6 @@ def project_setting(variable: str) -> str | None:
             raise ValueError(f"invalid {variable} in project .env")
         result = values[0] if values else None
     return result or None
-
-
-def deepseek_api_key() -> str | None:
-    return project_setting("DEEPSEEK_API_KEY")
 
 
 def relay_base_url() -> str:
@@ -182,17 +178,14 @@ class GatewayConfig:
     science_hosts: tuple[str, ...] = DEFAULT_SCIENCE_HOSTS
     denied_hosts: tuple[str, ...] = ()
     proxy: str | None = None
-    model_path: str = "/chat/completions"
+    model_path: str = "/responses"
 
     @classmethod
-    def from_host(cls, token: str, model: str, provider: str = "deepseek") -> "GatewayConfig":
+    def from_host(cls, token: str, model: str, provider: str = "openai-relay") -> "GatewayConfig":
         account = None
-        if provider == "deepseek":
-            key, base, path, variable = deepseek_api_key(), "https://api.deepseek.com/v1", "/chat/completions", "DEEPSEEK_API_KEY"
-        elif provider == "openai-relay":
-            key, base, path, variable = project_setting("OPENAI_RELAY_API_KEY"), relay_base_url(), "/responses", "OPENAI_RELAY_API_KEY"
-        else:
+        if provider != "openai-relay":
             raise ValueError("unsupported model provider")
+        key, base, path, variable = project_setting("OPENAI_RELAY_API_KEY"), relay_base_url(), "/responses", "OPENAI_RELAY_API_KEY"
         if not key:
             raise RuntimeError(f"set {variable} in project .env or on the controller host; it is never mounted into attempts")
         hosts = tuple(x.strip().lower() for x in os.environ.get(

@@ -19,7 +19,7 @@ WORKSPACE_FILES = (
     "question_result.json", "capsule_result.json", "run_manifest.json", "isolation_boundary.json",
     "event_timeline.json", "events.jsonl", "stderr.log",
 )
-# Generated scripts, audits and outputs. data/, tmp/ and home/ (OpenCode config/state) are never packed.
+# Generated scripts, audits and outputs. data/, tmp/ and home/ (Codex config/state) are never packed.
 WORKSPACE_DIRS = ("analysis",)
 # Checkout-level directories holding per-experiment manifests, reports, predictions and logs.
 OUTPUT_DIRS = ("analysis", "reports", "results", "logs", "diagnostics")

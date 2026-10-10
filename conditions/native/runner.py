@@ -31,8 +31,8 @@ from common.benchmark.a84_contract import (
     sha256_file,
     write_json,
 )
-from common.integrity.opencode_capture import (
-    capture_opencode, command_metrics, opencode_command, write_result, agent_manifest, generation_failure,
+from common.integrity.codex_agent import (
+    capture_agent, command_metrics, codex_command, write_result, agent_manifest, generation_failure,
 )
 from common.integrity.attempt_container import isolated_attempt
 from common.integrity.progress import RunProgress, progress_log
@@ -93,7 +93,7 @@ def preflight(items: list[dict], timeout: int, workers: int, *, resume: bool = F
     question_count = len(items)
     manifest = {
         "experiment": "Native question-level executable-code one-shot",
-        "granularity": "one independent OpenCode context per question",
+        "granularity": "one independent Codex context per question",
         "question_count": question_count,
         "calls": question_count,
         "max_concurrent_workers": workers,
@@ -234,10 +234,10 @@ def run_question_attempt(row: dict, run_root: Path, timeout: int, attempt_index:
     label = f"Native/{row['short_id']}/{row['question_id']}/attempt{attempt_index + 1}"
     progress_log(label, "preparing workspace and isolated container")
     workspace = prepare_workspace(run_root, row, attempt_index)
-    command = opencode_command(solver_prompt(row), SCHEMA, MODEL)
+    command = codex_command(solver_prompt(row), SCHEMA, MODEL)
     with isolated_attempt(command, answer_blind_env(controlled_env(workspace)), workspace,
                           schema=SCHEMA, reasoning_effort=REASONING_EFFORT) as (argv, env):
-        return_code, events, stderr, runtime = capture_opencode(
+        return_code, events, stderr, runtime = capture_agent(
             argv, env, timeout, event_guard=generation_event_guard(workspace),
             policy_exit_code=POLICY_EXIT_CODE,
             progress_label=label,

@@ -10,7 +10,7 @@ from typing import Any
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
 import common.benchmark.a84_contract as substrate
 from common.benchmark.a84_contract import (MODEL,NATIVE_PROMPT,NATIVE_SCHEMA,QUESTIONS,REASONING_EFFORT,TIMEOUT_SECONDS,candidate_policy,controlled_env,environment_manifest,load_rows,public_question,sha256_file,write_json)
-from common.integrity.opencode_capture import capture_opencode,command_metrics,opencode_command,write_result,agent_manifest
+from common.integrity.codex_agent import capture_agent,command_metrics,codex_command,write_result,agent_manifest
 from common.integrity.attempt_container import isolated_attempt
 from common.integrity.evaluator_access_policy import answer_blind_env,generation_event_guard,POLICY_EXIT_CODE
 from common.integrity.capsule_workspace import prepare_workspace,validate_native_result
@@ -73,9 +73,9 @@ def preflight(items,timeout):
  else:write_json(MANIFEST,p)
  return p
 def one(item,rows,root,timeout):
- w,_=prepare_workspace('0000',root,rows);cmd=opencode_command(SOLVER_PROMPT,NATIVE_SCHEMA,MODEL)
+ w,_=prepare_workspace('0000',root,rows);cmd=codex_command(SOLVER_PROMPT,NATIVE_SCHEMA,MODEL)
  with isolated_attempt(cmd,answer_blind_env(controlled_env(w)),w,schema=NATIVE_SCHEMA,reasoning_effort=REASONING_EFFORT) as (argv,env):
-  rc,ev,err,rt=capture_opencode(argv,env,timeout,event_guard=generation_event_guard(w),policy_exit_code=POLICY_EXIT_CODE)
+  rc,ev,err,rt=capture_agent(argv,env,timeout,event_guard=generation_event_guard(w),policy_exit_code=POLICY_EXIT_CODE)
  write_json(w/'event_timeline.json',ev);(w/'events.jsonl').write_text(''.join(json.dumps(z['event'])+'\n' for z in ev));(w/'stderr.log').write_text(err)
  r={'short_id':item['short_id'],'capsule_uuid':item['capsule_uuid'],'question_ids':item['question_ids'],'workspace':str(w),'attempt_count':1,'retry_attempted':False,'total_agent_calls':1,'return_code':rc,'runtime_seconds':rt,'controller_status':'failed','accepted':False,'event_metrics':command_metrics(ev)}
  try:
@@ -105,6 +105,6 @@ def main():
    if not f.is_file():continue
    freeze.append({'path':str(f.relative_to(ROOT)),'sha256':sha256_file(f) if f.is_file() else None})
  payload={'manifest':m,'native_oneshot':records,'freeze':{'status':'frozen_before_private_scoring','at_utc':dt.datetime.now(dt.timezone.utc).isoformat(),'artifacts':freeze,'manifest_sha256':sha256_file(MANIFEST),'reference_a_sha256':sha256_file(REFERENCE)},'generation_summary':{'capsules':len(items),'questions':question_count,'controller_passed_capsules':sum(r['accepted'] for r in records),'total_agent_calls':len(items),'retry_rate':0,'mean_attempts_per_capsule':1.0,'runtime_seconds_all_attempts':sum(r['runtime_seconds'] for r in records),'wall_runtime_seconds':time.monotonic()-st},'scoring':{'status':'not_started'}};write_json(OUT,payload)
- REPORT.write_text(f'# A-v1 Capsule Executable Workflow — Graded Compliance\n\n> 文件路径：`{REPORT}`\n\n> 文件说明：本文件以历史 84-version capsule one-shot prompt 为底座，要求任务代码落盘与每题 source evidence，并采用 FATAL / QUESTION_LOCAL / SOFT 合规分类；private post-hoc scoring 在冻结后另行执行。\n\nA used exactly {len(items)} fresh OpenCode calls for {question_count} questions, `max_attempts=1`, retry rate `0`, and mean attempts/capsule `1.0`.\n\nA controller-passed capsules: {payload["generation_summary"]["controller_passed_capsules"]}/{len(items)}. No scorer/evaluator was used during generation.\n')
+ REPORT.write_text(f'# A-v1 Capsule Executable Workflow — Graded Compliance\n\n> 文件路径：`{REPORT}`\n\n> 文件说明：本文件以历史 84-version capsule one-shot prompt 为底座，要求任务代码落盘与每题 source evidence，并采用 FATAL / QUESTION_LOCAL / SOFT 合规分类；private post-hoc scoring 在冻结后另行执行。\n\nA used exactly {len(items)} fresh Codex calls for {question_count} questions, `max_attempts=1`, retry rate `0`, and mean attempts/capsule `1.0`.\n\nA controller-passed capsules: {payload["generation_summary"]["controller_passed_capsules"]}/{len(items)}. No scorer/evaluator was used during generation.\n')
  print(json.dumps(payload['generation_summary'],indent=2))
 if __name__=='__main__':main()

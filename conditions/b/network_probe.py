@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Path: conditions/b/network_probe.py
-# Purpose: Launch the shared isolated OpenCode science diagnostic for Condition B.
+# Purpose: Launch the shared isolated Codex science diagnostic for Condition B.
 from __future__ import annotations
 
 import sys

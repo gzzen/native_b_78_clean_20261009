@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib, json, os, sys
 from pathlib import Path
 from typing import Any
-from common.integrity.opencode_capture import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
+from common.integrity.codex_agent import AGENT_LABEL, DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
 
 AGENT_BIN = Path(os.environ.get("AGENT_BIX_BIN", str(Path(sys.executable).resolve().parent)))
 MODEL = DEFAULT_MODEL
@@ -19,6 +19,6 @@ def controlled_env(bash_env: Path) -> dict[str, str]:
 def environment_manifest(bash_env: Path, timeout: int = TIMEOUT_SECONDS) -> dict[str, Any]:
     env = controlled_env(bash_env)
     values = {key: env[key] for key in ("PATH", "CONDA_PREFIX", "BASH_ENV", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "PYTHONHASHSEED")}
-    values.update({"model": MODEL, "reasoning_effort": REASONING_EFFORT, "timeout_seconds": timeout, "agent": "opencode-v2", "sandbox": "per-attempt Docker hard boundary", "expected_python": str((AGENT_BIN / "python").resolve())})
+    values.update({"model": MODEL, "reasoning_effort": REASONING_EFFORT, "timeout_seconds": timeout, "agent": AGENT_LABEL, "sandbox": "per-attempt Docker hard boundary", "expected_python": str((AGENT_BIN / "python").resolve())})
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
     return {"values": values, "sha256": hashlib.sha256(canonical.encode()).hexdigest()}

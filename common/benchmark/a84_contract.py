@@ -11,7 +11,7 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from common.integrity.opencode_capture import DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
+from common.integrity.codex_agent import AGENT_LABEL, DEFAULT_MODEL, DEFAULT_REASONING_EFFORT
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = ROOT
@@ -106,7 +106,7 @@ def environment_manifest() -> dict[str, Any]:
                "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS",
                "VECLIB_MAXIMUM_THREADS", "PYTHONHASHSEED")}
     selected.update({"model": MODEL, "reasoning_effort": REASONING_EFFORT,
-                     "timeout_seconds": TIMEOUT_SECONDS, "agent": "opencode-v2", "sandbox": "per-attempt Docker hard boundary",
+                     "timeout_seconds": TIMEOUT_SECONDS, "agent": AGENT_LABEL, "sandbox": "per-attempt Docker hard boundary",
                      "resource_access_policy": "network-none; host gateway scientific exact-host allowlist",
                      "expected_python": str((AGENT_BIN / "python").resolve()),
                      "bash_env": str(NATIVE_BASH_ENV.resolve()), "status": "parity_contract"})

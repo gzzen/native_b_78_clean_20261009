@@ -33,7 +33,7 @@ from common.integrity.evaluator_access_policy import (
 from common.integrity.attempt_container import isolated_attempt
 from common.integrity.progress import RunProgress, progress_log
 from common.integrity.resume import finalize_attempts, frozen_summary, prepare_resume
-from common.integrity.opencode_capture import opencode_command, write_result, agent_manifest, generation_failure
+from common.integrity.codex_agent import codex_command, write_result, agent_manifest, generation_failure
 
 
 # B = complete A execution/compliance substrate + B-only semantic grounding.
@@ -54,7 +54,7 @@ sha256_file = BASE_CONDITION.sha256_file
 write_json = BASE_CONDITION.write_json
 prepare_workspace = BASE_CONDITION.prepare_workspace
 validate_native_result = BASE_CONDITION.validate_native_result
-capture_opencode = BASE_CONDITION.capture_opencode
+capture_agent = BASE_CONDITION.capture_agent
 command_metrics = BASE_CONDITION.command_metrics
 compliance_audit = BASE_CONDITION.compliance_audit
 
@@ -658,11 +658,11 @@ def run_capsule_attempt(
         discover_operation_hints(rows),
     )
 
-    command = opencode_command(SOLVER_PROMPT, NATIVE_SCHEMA, MODEL)
+    command = codex_command(SOLVER_PROMPT, NATIVE_SCHEMA, MODEL)
 
     with isolated_attempt(command, answer_blind_env(controlled_env(workspace)), workspace,
                           schema=NATIVE_SCHEMA, reasoning_effort=REASONING_EFFORT) as (argv, env):
-        return_code, events, stderr, runtime = capture_opencode(
+        return_code, events, stderr, runtime = capture_agent(
             argv, env, timeout, event_guard=generation_event_guard(workspace),
             policy_exit_code=POLICY_EXIT_CODE,
             progress_label=label,

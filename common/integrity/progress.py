@@ -8,7 +8,7 @@ import threading
 from datetime import datetime, timezone
 
 _OUTPUT_LOCK = threading.Lock()
-_TOOLS = {"shell", "bash", "read", "write", "edit", "patch", "apply_patch", "glob", "grep", "webfetch"}
+_TOOLS = {"shell", "apply_patch"}
 
 
 def progress_log(label: str, message: str) -> None:
@@ -40,17 +40,17 @@ class AttemptProgress:
         item = event.get("item", {})
         if not isinstance(item, dict):
             item = {}
-        tool = item.get("opencode_tool")
-        if tool is not None:
+        tool = item.get("agent_tool")
+        if tool is not None and event.get("type") == "item.completed":
             self.tools += 1
             name = tool if isinstance(tool, str) and tool in _TOOLS else "other"
             status = item.get("status")
-            status = status if isinstance(status, str) and status in {"pending", "running", "completed", "error"} else "observed"
+            status = status if isinstance(status, str) and status in {"completed", "failed", "declined"} else "observed"
             progress_log(self.label, f"tool={name} status={status} elapsed={elapsed:.0f}s")
-        elif event.get("type") == "text" and not self.assistant_seen:
+        elif item.get("type") == "agent_message" and not self.assistant_seen:
             self.assistant_seen = True
             progress_log(self.label, f"assistant output received elapsed={elapsed:.0f}s")
-        elif event.get("type") == "error":
+        elif event.get("type") == "turn.failed":
             progress_log(self.label, f"agent error received elapsed={elapsed:.0f}s; inspect saved logs")
 
 

@@ -11,7 +11,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
-from common.integrity.opencode_capture import capture_opencode
+from common.integrity.codex_agent import capture_agent
 from common.integrity.progress import AttemptProgress, RunProgress, progress_log
 
 
@@ -27,15 +27,15 @@ class TimestampedStream(io.StringIO):
 
 class ProgressTests(unittest.TestCase):
     def test_tool_and_heartbeat_are_flushed_before_agent_finishes(self):
-        event = {"type": "tool_use", "part": {"tool": "shell", "state": {
-            "status": "completed", "input": {"command": "echo confidential-command"},
-            "output": "confidential-result"}}}
+        event = {"type": "item.completed", "item": {
+            "id": "item_0", "type": "command_execution", "command": "/bin/bash -lc 'echo confidential-command'",
+            "aggregated_output": "confidential-result", "exit_code": 0, "status": "completed"}}
         program = f"import json,time; print(json.dumps({event!r}),flush=True); time.sleep(0.6)"
         stderr, stdout = TimestampedStream(), io.StringIO()
         with redirect_stderr(stderr), redirect_stdout(stdout), \
-                patch("common.integrity.opencode_capture.AttemptProgress",
+                patch("common.integrity.codex_agent.AttemptProgress",
                       side_effect=lambda label: AttemptProgress(label, interval=0.05)):
-            code, records, _, _ = capture_opencode([sys.executable, "-c", program], dict(os.environ),
+            code, records, _, _ = capture_agent([sys.executable, "-c", program], dict(os.environ),
                                                   5, progress_label="Native/q1/attempt1")
         self.assertEqual(code, 0)
         self.assertEqual(len(records), 1)
@@ -54,10 +54,10 @@ class ProgressTests(unittest.TestCase):
         progress = AttemptProgress("Native/q1")
         with redirect_stderr(stream):
             progress(1, {"type": "item.completed", "item": {
-                "opencode_tool": "confidential-tool", "status": "confidential-status",
+                "agent_tool": "confidential-tool", "status": "confidential-status",
                 "command": "confidential-command"}})
-            progress(2, {"type": "error", "error": "confidential-error"})
-            progress(3, {"type": "text", "part": {"text": "confidential-answer"}})
+            progress(2, {"type": "turn.failed", "error": {"message": "confidential-error"}})
+            progress(3, {"type": "item.completed", "item": {"type": "agent_message", "text": "confidential-answer"}})
         self.assertNotIn("confidential", stream.getvalue())
         self.assertIn("tool=other status=observed", stream.getvalue())
 

@@ -19,7 +19,7 @@ for seed in 01 02 03; do
       tag="$rep_tag"
     fi
     python "conditions/${condition}/runner.py" --execute --resume \
-      --model "${MODEL:-deepseek/deepseek-flash}" \
+      --model "${MODEL:-openai-relay/gpt-5.6-sol}" \
       --reasoning-effort "${REASONING_EFFORT:-high}" \
       --workers "${WORKERS:-2}" --timeout "${TIMEOUT:-3600}" \
       --run-root "runs/${tag}" \

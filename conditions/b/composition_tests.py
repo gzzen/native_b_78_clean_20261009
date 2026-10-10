@@ -66,7 +66,7 @@ class BCompositionTests(unittest.TestCase):
 
     def test_b_reuses_a_execution_and_compliance_components(self) -> None:
         self.assertIs(condition_b.prepare_workspace, condition_a.prepare_workspace)
-        self.assertIs(condition_b.capture_opencode, condition_a.capture_opencode)
+        self.assertIs(condition_b.capture_agent, condition_a.capture_agent)
         self.assertIs(condition_b.compliance_audit, condition_a.compliance_audit)
         self.assertIs(condition_b.validate_native_result, condition_a.validate_native_result)
 
