@@ -64,24 +64,38 @@ def boundary_manifest():
                                        for name in ("attempt_container.py", "attempt_gateway.py", "attempt_relay.py", "codex_agent.py")}}
 
 
-def codex_binaries() -> dict[str, Path]:
-    """The pinned Linux binaries from scripts/install_codex.sh (or explicit overrides)."""
-    default = ROOT / "tools/codex" / CODEX_VERSION
-    paths = {"codex": os.environ.get("NATIVE_B_CODEX_BINARY") or default / "codex",
-             "codex-code-mode-host": os.environ.get("NATIVE_B_CODEX_CODE_MODE_HOST") or default / "codex-code-mode-host"}
-    binaries = {name: Path(path).resolve() for name, path in paths.items()}
-    missing = [name for name, path in binaries.items() if not path.is_file()]
-    if missing:
-        raise RuntimeError(f"missing pinned Codex binaries {missing}; run scripts/install_codex.sh")
-    return binaries
-
-
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+@functools.lru_cache(maxsize=4)
+def _verified_sha256(path: Path, size: int, mtime_ns: int) -> str:
+    return sha256_file(path)
+
+
+def codex_binaries() -> dict[str, Path]:
+    """The pinned Linux binaries installed offline by scripts/install_codex.sh.
+
+    Each must match the binary sha256 in codex_lock.json, however it was copied here.
+    """
+    default = ROOT / "tools/codex" / CODEX_VERSION
+    paths = {"codex": os.environ.get("NATIVE_B_CODEX_BINARY") or default / "codex",
+             "codex-code-mode-host": os.environ.get("NATIVE_B_CODEX_CODE_MODE_HOST") or default / "codex-code-mode-host"}
+    binaries = {name: Path(path).resolve() for name, path in paths.items()}
+    missing = [name for name, path in binaries.items() if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"missing pinned Codex binaries {missing}; install the offline bundle "
+                           "with scripts/install_codex.sh (see CODEX.md)")
+    pinned = json.loads(CODEX_LOCK.read_text(encoding="utf-8"))["binaries"]
+    for name, path in binaries.items():
+        stat = path.stat()
+        if _verified_sha256(path, stat.st_size, stat.st_mtime_ns) != pinned[name]["binary_sha256"]:
+            raise RuntimeError(f"{path} does not match the {name} sha256 pinned in {CODEX_LOCK.name}")
+    return binaries
 
 
 @functools.lru_cache(maxsize=2)
@@ -201,7 +215,8 @@ def isolated_attempt(command, environment, workspace, *, schema,
                         "science_hosts": list(config.science_hosts), "memory": os.environ.get("NATIVE_B_ATTEMPT_MEMORY", "16g"),
                         "agent": AGENT_LABEL, "model": model, "reasoning_effort": reasoning_effort,
                         "codex_version": metadata["version"],
-                        "codex_binary_sha256": {name: sha256_file(path) for name, path in binaries.items()},
+                        "codex_binary_sha256": {name: _verified_sha256(path, path.stat().st_size, path.stat().st_mtime_ns)
+                                                for name, path in binaries.items()},
                         "codex_config": config_text,
                         "codex_bundled_catalog_sha256": metadata["bundled_catalog_sha256"],
                         "codex_model_catalog_sha256": sha256_file(catalog_path)}

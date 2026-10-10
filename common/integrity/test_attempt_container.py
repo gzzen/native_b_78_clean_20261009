@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 from common.integrity.attempt_gateway import AttemptGateway, GatewayConfig, public_address, tls_client_hello
-from common.integrity.attempt_container import docker_command, validate_workspace_outputs
+from common.integrity.attempt_container import codex_binaries, docker_command, validate_workspace_outputs
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -144,6 +144,19 @@ class AttemptBoundaryTests(unittest.TestCase):
                 self.assertEqual(gateway.model_calls, 0)
             finally:
                 gateway.close()
+
+    def test_codex_binaries_must_match_the_pinned_sha256(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake = {name: Path(directory) / name for name in ("codex", "codex-code-mode-host")}
+            for path in fake.values():
+                path.write_text("not the pinned binary")
+            with patch.dict("os.environ", {"NATIVE_B_CODEX_BINARY": str(fake["codex"]),
+                                           "NATIVE_B_CODEX_CODE_MODE_HOST": str(fake["codex-code-mode-host"])}):
+                with self.assertRaisesRegex(RuntimeError, "does not match"):
+                    codex_binaries()
+            with patch.dict("os.environ", {"NATIVE_B_CODEX_BINARY": str(Path(directory) / "absent")}):
+                with self.assertRaisesRegex(RuntimeError, "offline bundle"):
+                    codex_binaries()
 
     def test_docker_only_mounts_current_attempt_and_allowlisted_runtime(self):
         with tempfile.TemporaryDirectory() as directory:

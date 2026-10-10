@@ -16,11 +16,19 @@ inspect runs made with it.
 
 Nothing from the machine's Codex setup reaches an attempt:
 
-- **Pinned binaries.** `scripts/install_codex.sh` downloads the Linux Codex and
-  code-mode host release archives named in `environment/codex_lock.json`,
-  verifies their sha256, and installs them under `tools/codex/0.158.0/`. The
-  controller refuses to start if `codex --version` differs from the lock. A
-  `codex` on `PATH` (npm, Homebrew, ...) is never used.
+- **Pinned binaries, installed offline.** The generation server never downloads
+  Codex. On any machine with internet, `scripts/make_codex_bundle.sh` packs the
+  Linux Codex and code-mode host release archives named in
+  `environment/codex_lock.json` into one tar file. On the server,
+  `scripts/install_codex.sh BUNDLE` installs them under `tools/codex/0.158.0/`
+  with no network access, checking each archive's and each binary's sha256
+  against the lock. Before every attempt the controller re-checks both binaries'
+  sha256 and the reported version, so a wrong or corrupted copy is refused
+  however it got there. A `codex` on `PATH` (npm, Homebrew, ...) is never used.
+- **No network at runtime.** Attempts run with `--network none`; the only path
+  out is the host gateway to the relay and the science allowlist. Update checks,
+  analytics and remote model lists are off, and the controller reads the model
+  catalog from the binary itself (`codex debug models --bundled`).
 - **Fresh `CODEX_HOME` per attempt.** It is `<workspace>/home/.codex`, holding
   only a generated `config.toml` and a one-model `model_catalog.json`, both
   mounted read-only. `~/.codex` (config, `auth.json`, memories, plugins, rules,
@@ -44,14 +52,23 @@ sha256 of both Codex binaries, the generated config and the catalog hashes.
 
 ## Server runbook
 
-On the Linux host, as a non-root user with Docker access, in this checkout:
+On a machine with internet (once per Codex version), build the offline bundle
+and copy it to the server alongside this checkout:
+
+```bash
+scripts/make_codex_bundle.sh      # -> out/codex-offline-0.158.0-x86_64-unknown-linux-musl.tar (~136 MB)
+scp out/codex-offline-0.158.0-x86_64-unknown-linux-musl.tar server:path/to/this/checkout/out/
+```
+
+On the Linux host, as a non-root user with Docker access, in this checkout
+(no internet needed):
 
 ```bash
 mamba activate agent_bix
 
-# 1. Pinned Codex (downloads ~110 MB from github.com/openai/codex releases).
-scripts/install_codex.sh
-tools/codex/0.158.0/codex --version          # codex-cli 0.158.0
+# 1. Pinned Codex from the offline bundle (no network; sha256-checked against the lock).
+scripts/install_codex.sh out/codex-offline-0.158.0-x86_64-unknown-linux-musl.tar
+#    -> prints codex-cli 0.158.0
 
 # 2. Relay credential, project-local and never committed.
 test -e .env || cp .env.example .env
@@ -59,8 +76,8 @@ chmod 600 .env
 # Edit .env: OPENAI_RELAY_API_KEY=your-relay-key
 # Optional: OPENAI_RELAY_BASE_URL=https://xfastapi.ai (requests go to <base>/responses)
 
-# 3. Attempt base image, as before.
-docker image inspect nvidia/cuda:11.8.0-base-ubuntu22.04 >/dev/null || docker pull nvidia/cuda:11.8.0-base-ubuntu22.04
+# 3. Attempt base image, as before (already present for the OpenCode runs).
+docker image inspect nvidia/cuda:11.8.0-base-ubuntu22.04 --format '{{.Id}}'
 
 # 4. Unit tests, then the real pinned Codex against a local mock relay (no paid calls).
 python -m unittest common.integrity.test_codex_agent common.integrity.test_attempt_container \
@@ -71,10 +88,6 @@ NATIVE_B_TEST_CODEX=1 python -m unittest common.integrity.test_codex_agent.RealC
 #    read-only inputs, ~/.codex / planted OPENAI_API_KEY / AGENTS.md never reach the model.
 python scripts/smoke_attempt_isolation.py --report results/codex_isolation_check.json
 ```
-
-If the server cannot reach github.com, run `scripts/install_codex.sh` on any
-machine with access and copy `tools/codex/0.158.0/` across; the controller
-checks the version, and the boundary record keeps both binaries' sha256.
 
 An exported `OPENAI_RELAY_API_KEY` takes precedence over `.env`. The loader
 reads only these keys, never executes shell expressions, and never exports them.
