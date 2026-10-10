@@ -34,9 +34,9 @@ Run the full 19-capsule / 78-question generation with:
 python conditions/b/runner.py --execute
 ```
 
-Generation uses OpenCode v2 with `deepseek/deepseek-flash`, high reasoning
-effort and 2 workers by default. Each capsule gets a private OpenCode server
-inside its own network-none container. See [OpenCode deployment](../../OPENCODE_DEEPSEEK.md).
+Generation uses the pinned Codex CLI with `openai-relay/gpt-5.6-sol`, high reasoning
+effort and 2 workers by default. Each capsule gets a fresh Codex session
+inside its own network-none container. See [Codex deployment](../../CODEX.md).
 
 Run an explicitly preregistered diagnostic subset with a fresh run root and
 output paths:
