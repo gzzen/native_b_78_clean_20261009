@@ -1,0 +1,20 @@
+{
+  "cli": "codex-cli",
+  "version": "0.158.0",
+  "release_tag": "rust-v0.158.0",
+  "platform": "linux/amd64",
+  "target": "x86_64-unknown-linux-musl",
+  "model_catalog_source": "codex debug models --bundled (this binary)",
+  "binaries": {
+    "codex": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.158.0/codex-x86_64-unknown-linux-musl.tar.gz",
+      "archive_sha256": "af9f5aa6e6662accf9d707cef0d9ca083880a173a9c2b6c22947edb7830e5778",
+      "member": "codex-x86_64-unknown-linux-musl"
+    },
+    "codex-code-mode-host": {
+      "url": "https://github.com/openai/codex/releases/download/rust-v0.158.0/codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz",
+      "archive_sha256": "5455c64be4ba371444710895aff6d74d653985a3bfc454a8b7fe42d6e6d11e3d",
+      "member": "codex-code-mode-host-x86_64-unknown-linux-musl"
+    }
+  }
+}
