@@ -5,16 +5,21 @@ import http.client
 import ipaddress
 import json
 import os
+import queue
+import re
 import select
 import shlex
 import socket
 import socketserver
 import ssl
 import threading
+import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from common.integrity.relay_monitor import RelayMonitor, RelayStats, shared as shared_monitor
 
 DEFAULT_SCIENCE_HOSTS = ("mygene.info", "maayanlab.cloud", "www.ensembl.org",
                          "grch37.ensembl.org", "rest.ensembl.org")
@@ -22,6 +27,21 @@ PROJECT_ENV = Path(__file__).resolve().parents[2] / ".env"
 DEFAULT_RELAY_BASE_URL = "https://xfastapi.ai"
 # Reasoning models can stream nothing for minutes; matches Codex's stream_idle_timeout_ms.
 STREAM_IDLE_SECONDS = 300
+# A model request may wait for admission and be retried upstream only until its
+# first byte reaches Codex, and well within the 300 s idle limits of
+# attempt_relay and Codex; after that the failure is Codex's to see.
+PRE_FIRST_BYTE_SECONDS = 200
+MIN_TRY_SECONDS = 10
+# How long/much of a 200 stream is held back to spot an in-stream refusal.
+PEEK_SECONDS = 30
+PEEK_BYTES = 256 * 1024
+RETRY_STATUSES = {429: "http_429", 502: "http_502", 503: "http_503", 504: "http_504",
+                  520: "http_52x", 521: "http_52x", 522: "http_52x", 523: "http_52x", 524: "http_52x",
+                  529: "http_529"}
+PREAMBLE_EVENTS = frozenset({"response.created", "response.in_progress", "response.queued"})
+FAILURE_EVENTS = frozenset({"error", "response.failed"})
+_CAPACITY = re.compile(r"capacity|busy|overload|too many requests|rate.?limit|try again later|slow.?down", re.I)
+_TRANSIENT = re.compile(r"server.?error|internal.?error|bad gateway|service unavailable|timed? ?out|upstream", re.I)
 
 
 def project_setting(variable: str) -> str | None:
@@ -168,6 +188,83 @@ def dial(host: str, port: int, proxy: str | None = None) -> socket.socket:
     return socket.create_connection((address, port), timeout=30)
 
 
+def sse_events(buffer: bytes) -> tuple[list[tuple[str | None, dict | None]], bytes]:
+    """Split complete SSE events off `buffer`; return (type, data) pairs and the remainder."""
+    events = []
+    text = buffer.replace(b"\r\n", b"\n")
+    while b"\n\n" in text:
+        block, text = text.split(b"\n\n", 1)
+        name, data = None, []
+        for line in block.split(b"\n"):
+            if line.startswith(b"event:"):
+                name = line[6:].strip().decode("utf-8", "replace")
+            elif line.startswith(b"data:"):
+                data.append(line[5:].strip())
+        payload = None
+        if data:
+            try:
+                payload = json.loads(b"\n".join(data))
+            except ValueError:
+                payload = None
+        if not isinstance(payload, dict):
+            payload = None
+        elif isinstance(payload.get("type"), str):
+            name = payload["type"]
+        if name or data:
+            events.append((name, payload))
+    return events, text
+
+
+def _error_fields(payload) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    response = payload.get("response")
+    error = response.get("error") if isinstance(response, dict) else None
+    error = error if isinstance(error, dict) else payload.get("error")
+    return error if isinstance(error, dict) else payload
+
+
+def error_code(body: bytes):
+    """A short code/type identifier from a JSON error body, never its message."""
+    try:
+        fields = _error_fields(json.loads(body))
+    except ValueError:
+        return None
+    return fields.get("code") or fields.get("type")
+
+
+def refusal_signal(name: str | None, payload: dict | None) -> tuple[str, object] | None:
+    """Classify an in-stream failure event as a retryable refusal; None otherwise."""
+    if name not in FAILURE_EVENTS:
+        return None
+    fields = _error_fields(payload)
+    code = fields.get("code") or fields.get("type")
+    text = " ".join(str(fields.get(key) or "") for key in ("code", "type", "message"))
+    if _CAPACITY.search(text):
+        return "sse_capacity", code
+    if _TRANSIENT.search(text):
+        return "sse_server_error", code
+    return None
+
+
+def retry_after(response) -> float | None:
+    value = response.getheader("Retry-After")
+    try:
+        return float(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def pump(response, sink: queue.Queue) -> None:
+    """Move upstream bytes to `sink`; end with None (EOF) or the read exception."""
+    try:
+        while chunk := response.read1(65536):
+            sink.put(chunk)
+        sink.put(None)
+    except Exception as exc:
+        sink.put(exc)
+
+
 @dataclass
 class GatewayConfig:
     token: str
@@ -224,8 +321,10 @@ class UnixServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 class AttemptGateway:
-    def __init__(self, socket_path: Path, config: GatewayConfig):
+    def __init__(self, socket_path: Path, config: GatewayConfig, monitor: RelayMonitor | None = None):
         self.config = config
+        self.monitor = monitor or shared_monitor()
+        self.stats = RelayStats()
         self.model_calls = 0
         self.lock = threading.Lock()
         self.server = UnixServer(str(socket_path), self.handler())
@@ -295,8 +394,6 @@ class AttemptGateway:
                 self.forward()
 
             def forward(self):
-                connection = None
-                response_started = False
                 try:
                     if self.headers.get("Transfer-Encoding"):
                         return self.fail(400, "gateway_transfer_encoding_unsupported")
@@ -307,45 +404,76 @@ class AttemptGateway:
                     if len(body) != length:
                         return self.fail(400, "gateway_short_body")  # Client disconnected mid-body.
                     headers = {"Content-Type": self.headers.get("Content-Type", "application/json")}
-                    is_model = self.path == "/model" + gateway.config.model_path
-                    if is_model:
-                        if self.command != "POST" or self.headers.get("Authorization") != "Bearer " + gateway.config.token:
-                            return self.fail()
-                        payload = json.loads(body)
-                        if payload.get("model") != gateway.config.model:
-                            return self.fail()
-                        with gateway.lock:
-                            gateway.model_calls += 1
-                            if gateway.model_calls > 256:
-                                return self.fail(429, "gateway_model_call_limit")
-                        target = urlsplit(gateway.config.upstream + self.path.removeprefix("/model"))
-                        if target.scheme != "https" or target.hostname != urlsplit(gateway.config.upstream).hostname:
-                            return self.fail()
-                        headers["Authorization"] = "Bearer " + gateway.config.credential
-                    else:
+                    if self.path != "/model" + gateway.config.model_path:
                         target = urlsplit(self.path)
                         if (target.scheme != "http" or target.username or target.fragment
                                 or not self.science_allowed(target.hostname, target.port or 80)):
                             return self.fail()
                         # Never inject/forward model credentials into scientific requests.
-                    port = target.port or (443 if target.scheme == "https" else 80)
-                    sock = dial(target.hostname, port, gateway.config.proxy)
-                    sock.settimeout(STREAM_IDLE_SECONDS)  # dial's 30 s is for connecting only.
-                    if target.scheme == "https":
-                        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=target.hostname)
-                    connection = http.client.HTTPConnection(target.hostname, port, timeout=STREAM_IDLE_SECONDS)
-                    connection.sock = sock
-                    headers["Host"] = target.hostname
-                    connection.request(self.command, target.path + ("?" + target.query if target.query else ""), body=body, headers=headers)
-                    response = connection.getresponse()
+                        return self.forward_plain(target, body, headers)
+                    if self.command != "POST" or self.headers.get("Authorization") != "Bearer " + gateway.config.token:
+                        return self.fail()
+                    payload = json.loads(body)
+                    if payload.get("model") != gateway.config.model:
+                        return self.fail()
+                    # Non-streamed /responses die at the relay's CDN (524) on long generations.
+                    if payload.get("stream") is not True:
+                        return self.fail(400, "gateway_stream_required")
+                    with gateway.lock:
+                        gateway.model_calls += 1
+                        if gateway.model_calls > 256:
+                            return self.fail(429, "gateway_model_call_limit")
+                    target = urlsplit(gateway.config.upstream + self.path.removeprefix("/model"))
+                    if target.scheme != "https" or target.hostname != urlsplit(gateway.config.upstream).hostname:
+                        return self.fail()
+                    headers["Authorization"] = "Bearer " + gateway.config.credential
+                except Exception:
+                    return self.fail(400, "gateway_bad_request")
+                finally:
+                    self.close_connection = True
+                self.forward_model(target, body, headers)
+
+            def open_upstream(self, target, body, headers, opened):
+                port = target.port or (443 if target.scheme == "https" else 80)
+                sock = dial(target.hostname, port, gateway.config.proxy)
+                opened["sockets"].append(sock)
+                sock.settimeout(STREAM_IDLE_SECONDS)  # dial's 30 s is for connecting only.
+                if target.scheme == "https":
+                    sock = ssl.create_default_context().wrap_socket(sock, server_hostname=target.hostname)
+                    opened["sockets"].append(sock)
+                connection = http.client.HTTPConnection(target.hostname, port, timeout=STREAM_IDLE_SECONDS)
+                connection.sock = sock
+                opened["connection"] = connection
+                headers = {**headers, "Host": target.hostname}
+                connection.request(self.command, target.path + ("?" + target.query if target.query else ""),
+                                   body=body, headers=headers)
+                return connection.getresponse()
+
+            def close_upstream(self, opened):
+                # Shut the socket down first: a pump thread blocked in recv() must wake up.
+                for sock in reversed(opened["sockets"]):
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                if opened["connection"] is not None:
+                    opened["connection"].close()
+
+            def send_head(self, response, length=None):
+                self.send_response(response.status)
+                for key in ("Content-Type", "Content-Length"):
+                    value = str(length) if key == "Content-Length" and length is not None else response.getheader(key)
+                    if value:
+                        self.send_header(key, value)
+                self.send_header("Connection", "close")
+                self.end_headers()
+
+            def forward_plain(self, target, body, headers):
+                opened, response_started = {"sockets": [], "connection": None}, False
+                try:
+                    response = self.open_upstream(target, body, headers, opened)
                     response_started = True
-                    self.send_response(response.status)
-                    for key in ("Content-Type", "Content-Length"):
-                        value = response.getheader(key)
-                        if value:
-                            self.send_header(key, value)
-                    self.send_header("Connection", "close")
-                    self.end_headers()
+                    self.send_head(response)
                     while chunk := response.read1(65536):
                         self.wfile.write(chunk)
                         self.wfile.flush()
@@ -357,7 +485,128 @@ class AttemptGateway:
                         self.fail(502, "gateway_upstream_error")
                 finally:
                     self.close_connection = True
-                    if connection:
-                        connection.close()
+                    self.close_upstream(opened)
+
+            def forward_model(self, target, body, headers):
+                started = time.monotonic()
+                gateway.stats.add("codex_requests")
+                while self.try_model(target, body, headers, started, started + PRE_FIRST_BYTE_SECONDS):
+                    pass
+
+            def try_model(self, target, body, headers, started, deadline) -> bool:
+                """One upstream try. True: refused before any byte reached Codex; try again."""
+                monitor, stats = gateway.monitor, gateway.stats
+                waited = time.monotonic()
+                ticket = monitor.admit(deadline)
+                stats.add("admission_wait_seconds", time.monotonic() - waited)
+                if ticket.forced:
+                    stats.add("forced_admissions")
+                stats.add("upstream_tries")
+                opened, outcome, terminal = {"sockets": [], "connection": None}, "aborted", None
+
+                def observe(name, data, decisive=False) -> None:
+                    nonlocal terminal
+                    if name == "response.completed":
+                        terminal = "completed"
+                    elif name in FAILURE_EVENTS:
+                        terminal = "drop"
+                        if not decisive:
+                            stats.signal("stream_failure_event", _error_fields(data).get("code"))
+
+                def refused(kind, code=None, after=None) -> bool:
+                    stats.signal(kind, code)
+                    if monitor.refused(ticket, after) + MIN_TRY_SECONDS < deadline:
+                        stats.add("transparent_retries")
+                        return True
+                    stats.add("refusals_forwarded")
+                    return False
+
+                try:
+                    try:
+                        response = self.open_upstream(target, body, headers, opened)
+                    except Exception:
+                        # Never echo upstream exceptions: they may contain auth or host details.
+                        if refused("connect_error"):
+                            return True
+                        self.fail(502, "gateway_upstream_error")
+                        return False
+                    if response.status != 200:
+                        try:
+                            payload = response.read(65536)
+                        except Exception:
+                            payload = b""
+                        kind = RETRY_STATUSES.get(response.status)
+                        if kind and refused(kind, error_code(payload), retry_after(response)):
+                            return True
+                        self.send_head(response, len(payload))
+                        self.wfile.write(payload)
+                        self.wfile.flush()
+                        return False
+                    sink: queue.Queue = queue.Queue()
+                    threading.Thread(target=pump, args=(response, sink), daemon=True).start()
+                    held, scan, seen, end, decision = [], b"", 0, None, None
+                    peek_until = min(time.monotonic() + PEEK_SECONDS, deadline)
+                    while decision is None and sum(map(len, held)) < PEEK_BYTES:
+                        try:
+                            chunk = sink.get(timeout=max(0.0, peek_until - time.monotonic()))
+                        except queue.Empty:
+                            break  # Still only preamble: commit and let Codex wait.
+                        if chunk is None or isinstance(chunk, Exception):
+                            end = chunk if chunk is not None else EOFError()
+                            break
+                        held.append(chunk)
+                        events, scan = sse_events(scan + chunk)
+                        for name, data in events:
+                            seen += 1
+                            decisive = decision is None and name not in PREAMBLE_EVENTS
+                            if decisive:
+                                decision = refusal_signal(name, data) or "commit"
+                            observe(name, data, decisive and decision != "commit")
+                    if isinstance(decision, tuple):
+                        if refused(*decision):
+                            return True
+                        outcome = "refused"
+                    elif decision is None and end is not None and not isinstance(end, EOFError):
+                        if refused("sse_stream_error"):
+                            return True
+                        self.fail(502, "gateway_upstream_error")
+                        return False
+                    elif decision is None and isinstance(end, EOFError) and seen:
+                        if refused("sse_early_eof"):
+                            return True
+                        outcome = "refused"
+                    else:
+                        monitor.committed(ticket)
+                    stats.first_byte(time.monotonic() - started)
+                    try:
+                        self.send_head(response)
+                        for chunk in held:
+                            self.wfile.write(chunk)
+                        self.wfile.flush()
+                        while end is None:
+                            chunk = sink.get()
+                            if chunk is None or isinstance(chunk, Exception):
+                                end = chunk if chunk is not None else EOFError()
+                                break
+                            events, scan = sse_events(scan + chunk)
+                            for name, data in events:
+                                observe(name, data)
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                        if outcome != "refused":
+                            outcome = terminal or "drop"
+                    except Exception:
+                        # The client went away after headers: never send a second response.
+                        stats.add("client_disconnects")
+                        outcome = "aborted"
+                    if outcome == "completed":
+                        stats.add("completed_streams")
+                    elif outcome == "drop":
+                        stats.add("mid_stream_drops")
+                    return False
+                finally:
+                    self.close_connection = True
+                    self.close_upstream(opened)
+                    monitor.finished(ticket, "aborted" if outcome == "refused" else outcome)
 
         return Handler

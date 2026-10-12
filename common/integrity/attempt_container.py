@@ -61,7 +61,8 @@ def boundary_manifest():
             "host_user_codex_home": "never_mounted; fresh per-attempt CODEX_HOME",
             "fail_closed": True,
             "controller_code_sha256": {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                                       for name in ("attempt_container.py", "attempt_gateway.py", "attempt_relay.py", "codex_agent.py")}}
+                                       for name in ("attempt_container.py", "attempt_gateway.py", "attempt_relay.py", "codex_agent.py",
+                                                    "relay_monitor.py")}}
 
 
 def sha256_file(path: Path) -> str:
@@ -235,4 +236,7 @@ def isolated_attempt(command, environment, workspace, *, schema,
                     raise RuntimeError("attempt container cleanup failed; stop generation")
             finally:
                 gateway.close()
+                # Content-free relay pacing/retry counters for this attempt.
+                (workspace / "relay_monitor.json").write_text(json.dumps(gateway.stats.to_json(), indent=2) + "\n")
+                gateway.monitor.absorb(gateway.stats)
             validate_workspace_outputs(workspace)

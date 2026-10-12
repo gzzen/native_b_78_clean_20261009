@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from common.integrity.attempt_gateway import AttemptGateway, GatewayConfig
+from common.integrity.relay_monitor import RelayMonitor, RelayStats
 
 
 class GatewayDisconnectTests(unittest.TestCase):
@@ -18,10 +19,11 @@ class GatewayDisconnectTests(unittest.TestCase):
                                        "https://xfastapi.ai", "host-only-key")
         gateway.model_calls = 0
         gateway.lock = threading.Lock()
+        gateway.monitor, gateway.stats = RelayMonitor(base_backoff=0.01, max_backoff=0.02), RelayStats()
         self.handler = object.__new__(gateway.handler())
         self.handler.command = "POST"
         self.handler.path = "/model/responses"
-        body = json.dumps({"model": "gpt-5.6-sol"}).encode()
+        body = json.dumps({"model": "gpt-5.6-sol", "stream": True}).encode()
         self.handler.headers = {"Content-Length": str(len(body)),
                                 "Authorization": "Bearer temporary-token"}
         self.handler.rfile = io.BytesIO(body)
@@ -68,7 +70,9 @@ class GatewayDisconnectTests(unittest.TestCase):
 
     def test_upstream_error_before_headers_returns_502_without_exception_details(self):
         self.connection.getresponse.side_effect = TimeoutError("host-only-key")
-        self.forward()
+        # No retry budget: the first connect error is final.
+        with patch("common.integrity.attempt_gateway.PRE_FIRST_BYTE_SECONDS", 0):
+            self.forward()
         self.handler.send_response.assert_called_once_with(502)
         self.handler.send_header.assert_any_call("Content-Type", "application/json")
         self.handler.wfile.write.assert_called_once()

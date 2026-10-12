@@ -281,6 +281,61 @@ class RealCodexTests(unittest.TestCase):
             self.assertEqual(len(requests), 2)
             self.assertTrue(all(auth and auth.startswith("Bearer ") for _, _, auth in requests))
 
+    def test_real_codex_never_sees_a_relay_refusal_the_gateway_retried(self):
+        """The real gateway forward path against a local relay whose first reply is "busy"."""
+        import socket
+        import threading
+        from http.server import ThreadingHTTPServer
+        from common.benchmark.a84_contract import controlled_env
+        from common.integrity import relay_monitor
+        from common.integrity.attempt_container import isolated_attempt
+        requests: list = []
+        refusals: list = []
+        Relay = code_mode_relay(requests)(None)
+
+        class BusyOnce(Relay):
+            def do_POST(self):
+                if refusals:
+                    return super().do_POST()
+                refusals.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))).get("stream"))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                busy = {"type": "error", "code": "server_is_overloaded", "message": "Server busy"}
+                self.wfile.write(f"event: error\ndata: {json.dumps(busy)}\n\n".encode())
+                self.close_connection = True
+
+        upstream = ThreadingHTTPServer(("127.0.0.1", 0), BusyOnce)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        self.addCleanup(upstream.shutdown)
+        (ROOT / "runs").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "runs") as directory:
+            workspace = Path(directory) / "q1"
+            (workspace / "data").mkdir(parents=True)
+            script = workspace / "analysis/scripts/solve.py"
+            script.parent.mkdir(parents=True)
+            script.write_text("print(42)\n")
+            command = codex_command("Run the persisted mock script, then return unresolved.", SCHEMA, DEFAULT_MODEL)
+            with patch.object(relay_monitor, "_shared", relay_monitor.RelayMonitor(1, base_backoff=0.5)), \
+                    patch.object(GatewayConfig, "from_host", side_effect=lambda token, model, provider="openai-relay":
+                                 GatewayConfig(token, model, "https://relay.invalid", "unused-mock-host-secret")), \
+                    patch("common.integrity.attempt_gateway.dial",
+                          side_effect=lambda *_: socket.create_connection(upstream.server_address)), \
+                    patch("common.integrity.attempt_gateway.ssl.create_default_context") as tls:
+                tls.return_value.wrap_socket.side_effect = lambda sock, **_: sock
+                with isolated_attempt(command, controlled_env(workspace), workspace, schema=SCHEMA,
+                                      reasoning_effort="high") as (argv, env):
+                    code, records, stderr, _ = capture_agent(argv, env, 240,
+                                                             event_guard=generation_event_guard(workspace))
+            self.assertEqual(code, 0, stderr[-2000:] + repr(records[-3:]))
+            self.assertEqual(refusals, [True])  # Codex streamed, and the refusal was absorbed.
+            self.assertFalse([r for r in records if r["event"].get("type") in {"error", "turn.failed"}])
+            self.assertEqual(write_result(records, SCHEMA, workspace / "question_result.json"), RESULT)
+            stats = json.loads((workspace / "relay_monitor.json").read_text())
+            self.assertEqual((stats["codex_requests"], stats["upstream_tries"], stats["transparent_retries"]), (2, 3, 1))
+            self.assertEqual(stats["signals"], {"sse_capacity": 1})
+            self.assertEqual(stats["completed_streams"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

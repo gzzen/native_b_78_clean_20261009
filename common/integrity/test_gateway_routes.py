@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from common.integrity.attempt_gateway import STREAM_IDLE_SECONDS, AttemptGateway, GatewayConfig
+from common.integrity.relay_monitor import RelayMonitor, RelayStats
 
 RELAY = GatewayConfig("attempt-token", "gpt-5.6-sol", "https://xfastapi.ai", "relay-key",
                       model_path="/responses")
@@ -20,8 +21,9 @@ class GatewayRouteTests(unittest.TestCase):
         gateway.config = config
         gateway.model_calls = 0
         gateway.lock = threading.Lock()
+        gateway.monitor, gateway.stats = RelayMonitor(), RelayStats()
         handler = object.__new__(gateway.handler())
-        body = json.dumps({"model": model, "input": []}).encode()
+        body = json.dumps({"model": model, "input": [], "stream": True}).encode()
         handler.command, handler.path = "POST", path
         handler.headers = {"Content-Length": str(len(body)), "Authorization": "Bearer " + token}
         handler.rfile, handler.wfile = io.BytesIO(body), MagicMock()

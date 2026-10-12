@@ -97,7 +97,7 @@ class AttemptBoundaryTests(unittest.TestCase):
                          patch("common.integrity.attempt_gateway.ssl.create_default_context") as tls:
                         tls.return_value.wrap_socket.side_effect = lambda sock, **kwargs: sock
                         connection = UnixConnection(path)
-                        connection.request("POST", "/model/responses", '{"model":"fixed-model"}',
+                        connection.request("POST", "/model/responses", '{"model":"fixed-model","stream":true}',
                                            {"Authorization":"Bearer short-token"})
                         response = connection.getresponse()
                         self.assertEqual(response.status, 200); self.assertEqual(response.read(), b"{}")
