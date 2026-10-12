@@ -207,6 +207,7 @@ The relay sometimes refuses work with a "busy"/capacity error (an SSE `error`
 event, or HTTP 429), and occasionally drops a stream mid-generation. Codex
 reports the refusal as `Selected model is at capacity` and does not retry it, so
 two layers handle it. Neither changes what the model sees.
+[RELAY_CAPACITY.md](RELAY_CAPACITY.md) explains exactly how both layers work.
 
 **Relay monitor (gateway).** One `RelayMonitor` (`common/integrity/relay_monitor.py`)
 is shared by every attempt gateway in a controller process:
