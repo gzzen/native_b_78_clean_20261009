@@ -22,6 +22,7 @@ PROGRESS = re.compile(r"^\[\d{2}:\d{2}:\d{2}Z\] \[(?:Native|B)[A-Za-z0-9._/:-]*\
     r"assistant output received elapsed=\d+s|agent error received elapsed=\d+s; inspect saved logs|"
     r"agent finished (?:exit=-?\d+|timeout|policy interrupted) elapsed=[\d.]+s events=\d+; validating and saving logs|"
     r"attempt=\d+ status=(?:passed|failed|policy interrupted); logs saved|"
+    r"relay failure class=relay_[a-z_]+; re-attempt \d+/\d+|relay cooling down; waiting \d+s|"
     r"resume reusing=\d+ remaining=\d+|generation already frozen; no agent calls made|"
     r"all (?:questions|capsules) finished; freezing artifacts and writing report)$")
 
@@ -117,8 +118,10 @@ def inspect_run(root: Path, experiment: str, condition: str, seed: str,
                                      read_json(workspace / "run_manifest.json", warnings))
     finished: dict[str, dict] = {}
     for name, (index, _, record) in latest.items():
-        if isinstance(record, dict) and ("policy_violation" not in record
-                or index >= 1 or "attempt_history" in record):
+        # A policy- or relay-failed attempt is pending until its chain writes attempt_history.
+        if isinstance(record, dict) and ("attempt_history" in record
+                or ("policy_violation" not in record and not record.get("relay_failure"))
+                or ("policy_violation" in record and index >= 1)):
             finished[name] = record
     pids = processes.get(str(run_root.resolve()), [])
     freeze = generation.get("freeze", {}) if isinstance(generation, dict) else {}

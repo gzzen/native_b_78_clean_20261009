@@ -36,7 +36,11 @@ from common.integrity.codex_agent import (
 )
 from common.integrity.attempt_container import isolated_attempt
 from common.integrity.progress import RunProgress, progress_log
-from common.integrity.resume import finalize_attempts, frozen_summary, prepare_resume
+from common.integrity.relay_failures import MAX_RELAY_RETRIES, RELAY_FAILURE_CLASSES, classify_relay_failure
+from common.integrity import relay_monitor
+from common.integrity.resume import (
+    RELAY_OUTAGE_WAIT_SECONDS, frozen_summary, prepare_resume, run_attempt_chain,
+)
 from common.integrity.evaluator_access_policy import (
     MAX_POLICY_RETRIES,
     POLICY_EXIT_CODE,
@@ -55,6 +59,8 @@ REPORT = ROOT / "reports/NATIVE_78_GENERATION.md"
 PROMPT_CONTRACT = ROOT / "conditions/native/prompt.md"
 RUNNABLE_SUFFIXES = {".py", ".r", ".sh"}
 substrate.NATIVE_BASH_ENV = ROOT / "conditions/native/agent_bix_bash_env.sh"
+RELAY_RETRIES = MAX_RELAY_RETRIES
+RELAY_OUTAGE_WAIT = RELAY_OUTAGE_WAIT_SECONDS
 
 
 def rows(selected_short_ids: set[str] | None = None,
@@ -116,6 +122,10 @@ def preflight(items: list[dict], timeout: int, workers: int, *, resume: bool = F
             "policy_violation_max_retries": MAX_POLICY_RETRIES,
             "policy_violation_action": "interrupt_and_fresh_workspace_retry",
             "second_policy_violation_action": "fail_closed",
+            "relay_infrastructure_max_retries": RELAY_RETRIES,
+            "relay_failure_classes": list(RELAY_FAILURE_CLASSES),
+            "relay_failure_action": "fresh_workspace_reattempt_after_relay_cooldown",
+            "relay_gateway_retry": "transparent_resend_only_before_first_byte_reaches_codex",
             "answer_blind": True,
         },
         "evaluator_api_access": "forbidden",
@@ -250,6 +260,7 @@ def run_question_attempt(row: dict, run_root: Path, timeout: int, attempt_index:
         "workspace": str(workspace), "attempt_index": attempt_index,
         "return_code": return_code, "runtime_seconds": runtime,
         "accepted": False, "controller_status": "failed", "event_metrics": command_metrics(events),
+        "relay_failure": classify_relay_failure(return_code, events),
     }
     violation = policy_violation(events)
     if violation is not None:
@@ -289,26 +300,17 @@ def run_question_attempt(row: dict, run_root: Path, timeout: int, attempt_index:
 
 
 def run_question(row: dict, run_root: Path, timeout: int, *, prior_attempts: list[dict] | None = None) -> dict:
-    attempts: list[dict] = list(prior_attempts or [])
-    if attempts and (len(attempts) != 1 or "policy_violation" not in attempts[0]):
-        raise ValueError("resume requires exactly one prior policy interruption")
-    final: dict | None = None
-    for attempt_index in range(len(attempts), MAX_POLICY_RETRIES + 1):
-        current = run_question_attempt(row, run_root, timeout, attempt_index)
-        attempts.append(current)
-        final = current
-        status = "passed" if current["accepted"] else "policy interrupted" if "policy_violation" in current else "failed"
-        progress_log(f"Native/{row.get('question_id', 'question')}", f"attempt={attempt_index + 1} status={status}; logs saved")
-        if "policy_violation" not in current:
-            break
-    assert final is not None
-    final = finalize_attempts(attempts, MAX_POLICY_RETRIES)
+    final = run_attempt_chain(
+        lambda attempt_index: run_question_attempt(row, run_root, timeout, attempt_index),
+        f"Native/{row.get('question_id', 'question')}", prior_attempts,
+        max_policy_retries=MAX_POLICY_RETRIES, max_relay_retries=RELAY_RETRIES,
+        relay_outage_wait=RELAY_OUTAGE_WAIT)
     write_json(Path(final["workspace"]) / "run_manifest.json", final)
     return final
 
 
 def main() -> None:
-    global MANIFEST, MODEL, OUT, REASONING_EFFORT, REPORT
+    global MANIFEST, MODEL, OUT, REASONING_EFFORT, RELAY_OUTAGE_WAIT, RELAY_RETRIES, REPORT
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--resume", action="store_true", help="reuse terminal outcomes and continue unfinished work in fresh workspaces")
@@ -322,9 +324,22 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, default=OUT)
     parser.add_argument("--report", type=Path, default=REPORT)
+    parser.add_argument("--relay-retries", type=int, default=RELAY_RETRIES,
+                        help="fresh re-attempts after a relay capacity refusal or stream drop (0-5)")
+    parser.add_argument("--relay-outage-wait", type=int, default=RELAY_OUTAGE_WAIT,
+                        help="longest wait in seconds for a cooling-down relay before an attempt starts")
     args = parser.parse_args()
     if not 1 <= args.workers <= 59:
         raise SystemExit("--workers must be between 1 and 59")
+    if not 0 <= args.relay_retries <= 5:
+        raise SystemExit("--relay-retries must be between 0 and 5")
+    if args.execute:
+        try:
+            import jsonschema  # noqa: F401  (write_result validates on the controller)
+        except ImportError:
+            raise SystemExit("jsonschema is not importable; activate the agent_bix environment") from None
+    RELAY_RETRIES, RELAY_OUTAGE_WAIT = args.relay_retries, max(0, args.relay_outage_wait)
+    monitor = relay_monitor.configure(args.workers)
     MANIFEST, OUT, REPORT = args.manifest.resolve(), args.output.resolve(), args.report.resolve()
     MODEL, REASONING_EFFORT = args.model, args.reasoning_effort
     substrate.MODEL, substrate.REASONING_EFFORT = MODEL, REASONING_EFFORT
@@ -345,7 +360,8 @@ def main() -> None:
         print(json.dumps({"status": "preflight_passed", "questions": len(items), "calls": len(items),
                           "workers": args.workers, "granularity": "question",
                           "evaluator_api_access": "forbidden",
-                          "policy_violation_max_retries": MAX_POLICY_RETRIES}, indent=2))
+                          "policy_violation_max_retries": MAX_POLICY_RETRIES,
+                          "relay_infrastructure_max_retries": RELAY_RETRIES}, indent=2))
         return
     nonempty = args.run_root.exists() and any(args.run_root.iterdir())
     if nonempty and not args.resume:
@@ -356,7 +372,8 @@ def main() -> None:
     work_root = args.run_root.resolve()
     plan = {"completed": {}, "prior": {}}
     if nonempty:
-        work_root, plan = prepare_resume(work_root, ROOT, "native", items, MANIFEST, Path(__file__), OUT)
+        work_root, plan = prepare_resume(work_root, ROOT, "native", items, MANIFEST, Path(__file__), OUT,
+                                         max_relay_retries=RELAY_RETRIES)
         progress_log("Native", f"resume reusing={len(plan['completed'])} remaining={len(items) - len(plan['completed'])}")
     started = time.monotonic()
     progress = RunProgress("Native", len(items), args.workers)
@@ -375,7 +392,7 @@ def main() -> None:
         for attempt in record["attempt_history"]:
             workspace = Path(attempt["workspace"])
             for path in (workspace / "question_result.json", workspace / "event_timeline.json", workspace / "events.jsonl",
-                         workspace / "stderr.log", workspace / "run_manifest.json", workspace / "isolation_boundary.json", workspace / "analysis/compliance_audit.json",
+                         workspace / "stderr.log", workspace / "run_manifest.json", workspace / "isolation_boundary.json", workspace / "relay_monitor.json", workspace / "analysis/compliance_audit.json",
                          *sorted((workspace / "analysis/scripts").rglob("*") if (workspace / "analysis/scripts").is_dir() else [])):
                 if not path.is_file():
                     continue
@@ -388,6 +405,13 @@ def main() -> None:
                    1 for record in records for attempt in record["attempt_history"]
                    if attempt["policy_violation"] is not None
                ),
+               "relay_failed_attempts": sum(
+                   1 for record in records for attempt in record["attempt_history"]
+                   if attempt.get("relay_failure") is not None
+               ),
+               "relay_retry_count": sum(record.get("relay_retry_count", 0) for record in records),
+               "relay_failed_final": sum(1 for record in records if record.get("relay_failure") is not None),
+               "relay_monitor": monitor.snapshot(),
                "runtime_seconds_all_attempts": sum(
                    attempt["runtime_seconds"] for record in records for attempt in record["attempt_history"]
                ),

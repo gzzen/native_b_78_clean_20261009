@@ -21,7 +21,7 @@ def item(number):
             "question_ids": [f"q{number}"], "question": "Mock question."}
 
 
-def saved_attempt(root, condition, task, index, accepted, policy=False):
+def saved_attempt(root, condition, task, index, accepted, policy=False, relay=None):
     name = task["question_id"] if condition == "native" else f"{task['short_id']}__{task['capsule_uuid']}"
     workspace = root / f"{index:04d}" / name
     workspace.mkdir(parents=True)
@@ -30,6 +30,8 @@ def saved_attempt(root, condition, task, index, accepted, policy=False):
               "runtime_seconds": 1, "controller_status": "passed" if accepted else "failed"}
     if policy:
         record.update(policy_violation={"reason": "mock policy"}, controller_status="interrupted_policy_violation")
+    if relay:
+        record.update(relay_failure=relay, return_code=1)
     for filename in ("event_timeline.json", "events.jsonl", "stderr.log", "isolation_boundary.json"):
         (workspace / filename).write_text("[]" if filename.endswith(".json") else "")
     if accepted:
@@ -77,6 +79,49 @@ class ResumeTests(unittest.TestCase):
                 self.assertEqual(exhausted["controller_status"], "failed_closed_repeated_policy_violation")
                 self.assertEqual(exhausted["total_agent_calls"], 2)
                 self.assertEqual(list(plan["prior"]), [tasks[2][key]])
+
+    def test_plan_reruns_relay_failures_with_budget_and_reuses_exhausted_chains(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tasks = [item(i) for i in range(3)]
+            saved_attempt(root, "native", tasks[0], 0, False, relay="relay_capacity")
+            for index in range(4):
+                saved_attempt(root, "native", tasks[1], index, False, relay="relay_stream_drop")
+            saved_attempt(root, "native", tasks[2], 0, False, relay="relay_capacity")
+            saved_attempt(root / "resume_later", "native", tasks[2], 1, True)
+            plan = resume_plan(root, "native", tasks)
+            self.assertEqual(list(plan["prior"]), ["q0"])
+            self.assertEqual(plan["completed"]["q1"]["controller_status"], "failed_relay_retries_exhausted")
+            self.assertEqual(plan["completed"]["q1"]["relay_retry_count"], 3)
+            self.assertTrue(plan["completed"]["q2"]["accepted"])
+            self.assertEqual(plan["completed"]["q2"]["retry_reason"], "prior_attempt_relay_capacity")
+            # A smaller budget turns the pending capacity failure into a final one.
+            with self.assertRaisesRegex(RuntimeError, "duplicate terminal"):
+                resume_plan(root, "native", tasks, max_relay_retries=2)  # q1 holds more than the budget allows.
+            small = root / "small"
+            saved_attempt(small, "native", tasks[0], 0, False, relay="relay_capacity")
+            plan = resume_plan(small, "native", tasks, max_relay_retries=0)
+            self.assertEqual(plan["completed"]["q0"]["controller_status"], "failed_relay_retries_exhausted")
+            saved_attempt(root, "native", tasks[1], 4, True)
+            with self.assertRaisesRegex(RuntimeError, "duplicate terminal"):
+                resume_plan(root, "native", tasks)
+
+    def test_resumed_relay_retry_continues_the_chain(self):
+        for module, function, condition in ((native, native.run_question, "native"), (b, b.run_capsule, "b")):
+            with self.subTest(condition=condition), tempfile.TemporaryDirectory() as temporary:
+                root, task = Path(temporary), item(0)
+                first = saved_attempt(root / "original", condition, task, 0, False, relay="relay_capacity")
+                second = saved_attempt(root / "new", condition, task, 1, True)
+                with patch.object(module, "run_question_attempt" if condition == "native" else "run_capsule_attempt",
+                                  return_value=second) as call:
+                    args = (task, root / "new", 10) if condition == "native" else (task, [task], root / "new", 10)
+                    final = function(*args, prior_attempts=[first])
+                self.assertEqual(call.call_count, 1)
+                self.assertEqual(call.call_args.args[-1], 1)
+                self.assertTrue(final["accepted"])
+                self.assertEqual(final["relay_retry_count"], 1)
+                with self.assertRaisesRegex(ValueError, "pending policy or relay retry"):
+                    function(*args, prior_attempts=[second])
 
     def test_both_runners_resume_only_unfinished_units_and_freeze_full_scope(self):
         for condition, module in (("native", native), ("b", b)):

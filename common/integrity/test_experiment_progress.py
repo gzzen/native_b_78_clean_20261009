@@ -71,6 +71,24 @@ class ExperimentProgressTests(unittest.TestCase):
             run = self.inspect(root, "b")
             self.assertEqual((run["unit"], run["expected"], run["completed"], run["failed"]), ("capsules", 19, 1, 1))
 
+    def test_relay_failure_awaits_reattempt_and_relay_progress_lines_are_parsed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_root = root / "runs" / f"{EXPERIMENT}_native_seed01"
+            write(run_root / "0000/q1/run_manifest.json",
+                  {"accepted": False, "controller_status": "failed", "relay_failure": "relay_capacity"})
+            self.assertEqual(self.inspect(root)["completed"], 0)
+            write(run_root / "0001/q1/run_manifest.json",
+                  {"accepted": False, "controller_status": "failed_relay_retries_exhausted",
+                   "relay_failure": "relay_capacity", "attempt_history": [{}, {}]})
+            self.assertEqual(self.inspect(root)["completed"], 1)
+            log = root / "logs" / EXPERIMENT / "native_seed01.log"
+            log.parent.mkdir(parents=True)
+            for line in ("[12:43:51Z] [Native/bix-10-q2] relay failure class=relay_capacity; re-attempt 1/3",
+                         "[12:43:52Z] [Native/bix-10-q2] relay cooling down; waiting 37s"):
+                log.write_text(line + "\n")
+                self.assertEqual(self.inspect(root)["log"]["last_progress"], line)
+
     def test_process_check_matches_exact_run_path_and_does_not_expose_arguments(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

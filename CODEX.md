@@ -198,8 +198,69 @@ errors (`Reconnecting... 1/2`) do not fail an attempt by themselves.
 each record's `failure_reason` in the generation JSON, then that workspace's
 `stderr.log` and `events.jsonl`. Failure reasons name the Codex event type and an
 HTTP status when one is present, never the message body. None of these is a
-private correctness verdict. For runs with a policy retry, inspect both `0000`
-and `0001`.
+private correctness verdict. For runs with a policy or relay retry, inspect every
+attempt directory (`0000`, `0001`, ...) listed in `attempt_history`.
+
+## Relay capacity: monitor and re-attempts
+
+The relay sometimes refuses work with a "busy"/capacity error (an SSE `error`
+event, or HTTP 429), and occasionally drops a stream mid-generation. Codex
+reports the refusal as `Selected model is at capacity` and does not retry it, so
+two layers handle it. Neither changes what the model sees.
+
+**Relay monitor (gateway).** One `RelayMonitor` (`common/integrity/relay_monitor.py`)
+is shared by every attempt gateway in a controller process:
+
+- Upstream `/responses` requests are paced by an AIMD in-flight limit that starts
+  at `--workers`. A refusal halves the limit and starts a jittered cooldown
+  (5 s doubling to 120 s, longer when the relay sends `Retry-After`).
+- Three refusals in a row open a circuit breaker. After the cooldown, one real
+  request goes through as a probe; the breaker closes when the relay accepts it.
+  There are no paid health checks.
+- A refused request is resent upstream **only while Codex has received nothing**
+  from it: HTTP 429/502/503/504/52x/529, connection errors, or an SSE
+  `error`/`response.failed` that arrives before the first output event. The
+  gateway holds back at most 30 s / 256 KiB of the stream to see this. The whole
+  wait-and-retry window ends 200 s after the request arrived, below the 300 s idle
+  limits; after that the refusal is forwarded verbatim. Codex never sees an
+  absorbed refusal, and the request body it sent is resent byte for byte.
+- Non-streamed model requests are refused (`gateway_stream_required`): the relay's
+  CDN cuts them off at about 125 s (Cloudflare 524).
+- Each attempt writes content-free counters to `relay_monitor.json`: requests,
+  upstream tries, transparent retries, refusal signals, short error codes,
+  admission wait, time to first byte, completed streams and mid-stream drops. The
+  run totals appear under `generation_summary.relay_monitor`.
+
+**Controller re-attempts.** A failed turn whose final error is a relay capacity
+refusal (`relay_capacity`) or a relay stream drop that Codex could not reconnect
+(`relay_stream_drop`) is re-run from scratch in a fresh workspace, container and
+gateway. No state carries over. The default is up to 3 re-attempts
+(`--relay-retries 0..5`). Before every attempt, the controller waits while the
+relay is cooling down, for up to `--relay-outage-wait` seconds (default 1800).
+This means an outage holds work back instead of spending re-attempts. That wait
+happens before the container starts, so it does not count against `--timeout`.
+Timeouts, schema or compliance failures and any other model-side outcome are
+never re-attempted; `"retry": false` in `conditions/*/config.json` still means no
+scientific or repair retries.
+
+Records carry:
+- `relay_failure` (the class, or null);
+- `relay_retry_count` and `policy_retry_count`;
+- `retry_reason` (for example `prior_attempt_relay_capacity`);
+- `failure_reason` per attempt in `attempt_history`.
+
+When the budget is spent, the final status is `failed_relay_retries_exhausted`.
+The generation summary adds `relay_failed_attempts`, `relay_retry_count` and
+`relay_failed_final`, and the manifest's `retry_policy` records the budget.
+`--resume` re-runs relay failures that still have budget and reuses everything
+else.
+
+Progress logs show `relay failure class=<class>; re-attempt N/M` and
+`relay cooling down; waiting Ns`. The runners refuse to start a paid run if the
+controller cannot import `jsonschema`; activate `agent_bix` first.
+
+Runs started before this change have a different manifest and cannot be resumed
+with this code. Start them again under a fresh tag.
 
 `.gitignore` excludes local secrets, caches, datasets, `tools/`, `out/`, attempt
 workspaces and generated outputs.
